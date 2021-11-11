@@ -1,0 +1,6 @@
+#PyCharm directory
+.idea
+#Compressed files
+*.pyc
+*__pycache__
+
