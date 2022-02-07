@@ -5,6 +5,12 @@ Original data is at https://cdn-files.soa.org/research/ilec/ilec-2009-18-2021052
 
 Package constant fn_csv is the file in the zip.
 
+To use:
+
+data = prepare_all(MY_DATA_DIRECTORY)
+
+.. which will download the zip, unzip, preprocess, and save parquet files.  The parquet files 
+are much faster to load than the csv.
 '''
 
 import pandas as pd, numpy as np, os, datetime as dt
@@ -25,9 +31,6 @@ logger.setLevel(logging.INFO)
 
 from zipfile import ZipFile
 fn_csv = 'ILEC 2009-18 20210528.csv' # the fn of the csv
-
-def test(msg):
-    logger.info(msg)
 
 def download(data_dir: Union[str, Path], force: bool=True) -> Path:
     """
