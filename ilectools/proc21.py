@@ -69,6 +69,7 @@ def download(data_dir: Union[str, Path], force: bool=True) -> Path:
 def read_csv(data_dir: Union[str, Path], chunksize: int=500000) -> pd.DataFrame:
     """Read in  the downloaded csv at the given filename  and return a dataframe.
     This function specifies data types of certain ambigous columns and reads in chunks.
+    It also saves a pkl and a parquet of the data.
     """
     data_dir = Path(data_dir)
     ffn_csv = data_dir / fn_csv
@@ -95,6 +96,7 @@ def read_csv(data_dir: Union[str, Path], chunksize: int=500000) -> pd.DataFrame:
     data = pd.concat(list_of_dataframes)
     logger.info(f"...concatenated, {len(data):,.0f} records in result.")
     data.index.name = 'row' # as was unnamed in original file
+    save_pkl_parquet(data, data_dir)
     return data
 
 
