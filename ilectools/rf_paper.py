@@ -1,35 +1,40 @@
-"""Code used in the rollforward paper
+"""Code used in the Rollforward paper
 
 cols_valact:
 valcols: value column list
 tabkeys: key value columns for mortality rates: qx should only vary by these
-class rollforward: for working with rollforwards, error metrics etc
+class Rollforward: for working with rollforwards, error metrics etc
 
 save_data: FIX - MAKE THIS: saves the pkls, makes from the downloaded files
 
 """
 
-import io
+
 from matplotlib import pyplot as plt
-import base64
 import pandas as pd
 import numpy as np
 
 
-def getbase64():
-    """Get base64 encoding from current figure"""    
-    # https://stackoverflow.com/questions/56361175/why-is-picture-annotation-cropped-when-displaying-or-saving-figure/56370990#56370990
-    figfile = io.BytesIO()
-    plt.savefig(figfile, format='png', bbox_inches='tight') 
-    figfile.seek(0)  # rewind to beginning of file
-    return str( base64.b64encode(figfile.getvalue()), 'utf-8') # must change from byte string to normal string
 
 
-def preprocess():
-    """Preprocess the text file downloaded from the SOA into other files that are faster to load, and with columns renamed."""
-    # takes 2-2:30 or so to read from txt
+# columns in valact: for the detailed split for decomp?
+cols_valact = ('preferred_indicator,gender,smoker_status,face_amount_band,number_of_preferred_classes,preferred_class,insurance_plan'.split(',')
+               +'issue_age,duration,soa_post_level_term_indicator'.split(','))
+# columns in valact for the Rollforward
+cols_valact_rf= ['issue_age',
+ 'soa_post_level_term_indicator',
+ 'insurance_plan',
+ 'gender',
+ 'duration',
+ 'smoker_status']
+
+def preprocess(data_dir: UNION[str, Path]):
+    """Preprocess the text file downloaded from the SOA into other files that are
+    faster to load, and with columns renamed.
+    """
+    # takes 2-2:30 or so to read from txt depending on drive type
     # takes 5 min for all this
-    data_full = pd.read_csv('/mnt/strix0/brian/ilec/2009-15 Data 20180601.txt', sep='\t')
+    data_full = pd.read_csv(data_dir / '2009-15 Data 20180601.txt', sep='\t')
     # replace spaces in column names with underscores; make lower case
     data_full.rename(columns=lambda c: c.replace(' ', '_').lower(), inplace=True) 
 
@@ -64,7 +69,7 @@ def preprocess():
            'expected_death_qx2001vbt_by_amount',
            'expected_death_qx2008vbt_by_amount',
            'expected_death_qx2008vbtlu_by_amount',
-           'expected_death_qx2015vbt_by_amount',
+           'expected_death_qx2015vbt_by_amount',    
            'expected_death_qx7580e_by_policy',
            'expected_death_qx2001vbt_by_policy',
            'expected_death_qx2008vbt_by_policy',
@@ -79,25 +84,7 @@ def preprocess():
     dat.to_pickle('/mnt/strix0/brian/ilec/2009-15_data_adults.pkl', protocol=4)
 
 
-
-
-# columns in valact: for the detailed split for decomp?
-cols_valact = ('preferred_indicator,gender,smoker_status,face_amount_band,number_of_preferred_classes,preferred_class,insurance_plan'.split(',')
-               +'issue_age,duration,soa_post_level_term_indicator'.split(','))
-# columns in valact for the rollforward
-cols_valact_rf= ['issue_age',
- 'soa_post_level_term_indicator',
- 'insurance_plan',
- 'gender',
- 'duration',
- 'smoker_status']
-
-
-valcols = 'amount_act,amount_2015vbt,amount_xps,policy_act,policy_2015vbt,policy_xps'.split(',') # really just using these value columns: i.e. things to add up, not to group by
-tabkeys = ['age_basis', 'smoker_status', 'gender', 'issue_age', 'duration'] # key values for mortaity rates. qx should only vary by these
-
-
-class rollforward():
+class Rollforward():
     """
 Attributes:
         
@@ -201,7 +188,7 @@ Functions
         R, r, dr, w, dw = tuple(getattr(self, k) for k in 'R,r,dr,w,dw'.split(',')) # for convenience
         tmp = pd.DataFrame({'R':R, 'r dw':(r*dw).sum(), 'dr w':(dr*w).sum(), 'dr dw':(dr*dw).sum()})
         tmp['Total'] = tmp.sum(axis=1)
-        return tmp.style.format('{:,.1%}').set_caption(self.title + ' rollforward')
+        return tmp.style.format('{:,.1%}').set_caption(self.title + ' Rollforward')
 
     
     def diagnostics(self):

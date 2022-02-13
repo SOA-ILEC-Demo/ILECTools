@@ -1,5 +1,5 @@
 '''
-Preprocessing tools for the 2021/12 data release
+Preprocessing tools for the 2018 and the 2021/12 data releases
 
 Original data is at https://cdn-files.soa.org/research/ilec/ilec-2009-18-20210528.zip
 
@@ -11,6 +11,9 @@ data = prepare_all(MY_DATA_DIRECTORY)
 
 .. which will download the zip, unzip, preprocess, and save parquet files.  The parquet files 
 are much faster to load than the csv.
+
+https://cdn-files.soa.org/web/ilec-2016/ilec-data-set.zip
+
 '''
 
 import pandas as pd, numpy as np, os, datetime as dt
@@ -68,7 +71,7 @@ def download(data_dir: Union[str, Path], force: bool=True) -> Path:
 
 def read_csv(data_dir: Union[str, Path], chunksize: int=500000) -> pd.DataFrame:
     """Read in  the downloaded csv at the given filename  and return a dataframe.
-    This function specifies data types of certain ambigous columns and reads in chunks.
+    This function specifies data types of certain ambiguous columns and reads in chunks.
     It also saves a pkl and a parquet of the data.
     """
     data_dir = Path(data_dir)
@@ -120,7 +123,7 @@ def save_pkl_parquet(data: pd.DataFrame, data_dir: Union[str, Path]):
 
 def make_v1(data: pd.DataFrame, data_dir: Union[str, Path])->pd.DataFrame:
     """Make v1 of the data, save parquet, and return it.
-    1. lower-case names with underscores instead of spaces
+    1. lower-case names with underscores instead of spaces: renamed as with utilities.NEW_NAMES
     2. Fill preferred_class and number_of_preferred_classes with 1s instead of nulls, convert to smaller type
     3. Makes field 'uw' that is smoker status / number of preferred classes / preferred class
     4. Make columns band_min, band_max for max and min of face band
@@ -131,46 +134,9 @@ def make_v1(data: pd.DataFrame, data_dir: Union[str, Path])->pd.DataFrame:
     for c in ['preferred_class', 'number_of_preferred_classes']:
         data[c] = data[c].fillna(1).astype(np.int8)
 
-         
-    # Renaming columns for convenience and consistency of name components (metric_item where metric = policy or amount)
-    newnames = {'number_of_deaths':'pol_act'
-                 , 'death_claim_amount':'amt_act'
-                 , 'policies_exposed':'pol_xps'
-                 , 'amount_exposed':'amt_xps'
-                 , 'expdeathqx2015vbtwmi_bypol':'pol_2015vbtwmi'
-                 , 'expdeathqx2015vbtwmi_byamt':'amt_2015vbtwmi'}
-    newnames.update({_:'{}_{}'.format({'amount':'amt', 'policy':'pol'}[_.split('_')[-1]],
-                                           _.split('_')[2][2:])
-                     for _ in ['expected_death_qx7580e_by_amount',
-                                'expected_death_qx2001vbt_by_amount',
-                                'expected_death_qx2008vbt_by_amount',
-                                'expected_death_qx2008vbtlu_by_amount',
-                                'expected_death_qx2015vbt_by_amount',
-                                'expected_death_qx7580e_by_policy',
-                                'expected_death_qx2001vbt_by_policy',
-                                'expected_death_qx2008vbt_by_policy',
-                                'expected_death_qx2008vbtlu_by_policy',
-                                'expected_death_qx2015vbt_by_policy'
-                                  ]})
+    from .utilities import NEW_NAMES
 
-    # central moments
-    newnames.update({c:'{}_{}'.format(c[-3:], c.split('_')[0]) 
-      for c in ['cen2momp1wmi_byamt',
-                  'cen2momp2wmi_byamt',
-                  'cen3momp1wmi_byamt',
-                  'cen3momp2wmi_byamt',
-                  'cen3momp3wmi_byamt',
-                  'cen2momp2wmi_bypol',
-                  'cen3momp3wmi_bypol',
-                  'cen2momp1_byamt',
-                  'cen2momp2_byamt',
-                  'cen3momp1_byamt',
-                  'cen3momp2_byamt',
-                  'cen3momp3_byamt',
-                  'cen2momp2_bypol',
-                  'cen3momp3_bypol']})
-
-    data.columns = [newnames.get(c,c) for c in data.columns] # renaming in place was slow 
+    data.columns = [NEW_NAMES.get(c,c) for c in data.columns] # renaming in place was slow
 
     logger.info('set uw column')
     data['uw'] = (data['smoker_status'].str[0] 
@@ -215,3 +181,4 @@ def prepare_all(data_dir: Union[str, Path])->pd.DataFrame:
     d = make_v1(d, data_dir)
     d = make_v2(d, data_dir)
     return d
+

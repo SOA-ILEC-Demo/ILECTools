@@ -196,7 +196,7 @@ def large_graph(d, col, title):
     return ae
 
 
-# Graph rollforward
+# Graph Rollforward
 def graphRollforward(d, type=0, metric='amt', **kwargs):
     """type:
     0: 2 steps, skipping the data change
@@ -206,7 +206,7 @@ def graphRollforward(d, type=0, metric='amt', **kwargs):
     
     ymin, ymax = d.columns.to_frame()['observation_year'].min(), d.columns.to_frame()['observation_year'].max()
     
-    # pull togethereach year of the rollforward. 
+    # pull togethereach year of the Rollforward.
     r = pd.concat([rfw(d, y, steps=steps, metric=metric)
                    for y in range(ymin+1, ymax+1)]
                   , keys=range(ymin+1, ymax+1)).sort_index(axis=0).sort_index(axis=1)
