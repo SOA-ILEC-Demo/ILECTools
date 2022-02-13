@@ -1,21 +1,36 @@
 '''
 Preprocessing tools for the 2018 and the 2021/12 data releases
 
-Original data is at https://cdn-files.soa.org/research/ilec/ilec-2009-18-20210528.zip
+Example: to download, decompress (unzip), and preprocess:
 
-Package constant fn_csv is the file in the zip.
+    data = prepare_all(URLS[2018], data_dir)
 
-To use:
+... for the set published in 2018.
 
-data = prepare_all(MY_DATA_DIRECTORY)
-
-.. which will download the zip, unzip, preprocess, and save parquet files.  The parquet files 
-are much faster to load than the csv.
-
-https://cdn-files.soa.org/web/ilec-2016/ilec-data-set.zip
+parquet files are saved, which are loaded much faster than csvs.
 
 '''
 
+
+'''
+
+Things I want to do
+
+* Pass dataframe itself from one step to the next
+* pass a directory and date and get that version
+* pass a year and get that version
+
+
+2018 file: 2009-16
+2021 file: 2009-18 but only ny for 2018
+
+I think: key off of year file published.  Attributes:
+url
+csv fn
+other fns
+'''
+# URLS gives the public URL by year in which the dataset was made public.
+# I'm not providing context here, that context is on the appropriate site.
 import pandas as pd, numpy as np, os, datetime as dt
 
 
@@ -26,62 +41,70 @@ from pathlib import Path
 from typing import Union
 
 import logging
+from zipfile import ZipFile
+
+
 # logging.basicConfig seems to be required, logging so unintuitive :/
 logging.basicConfig(format='%(asctime)s %(name)s %(levelname)s:  %(message)s', level=logging.ERROR)
 # logger for just this module
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-from zipfile import ZipFile
-fn_csv = 'ILEC 2009-18 20210528.csv' # the fn of the csv
+# Constants
+URLS = {2021: 'https://cdn-files.soa.org/research/ilec/ilec-2009-18-20210528.zip',
+        2018: 'https://cdn-files.soa.org/web/ilec-2016/ilec-data-set.zip'}
 
-def download(data_dir: Union[str, Path], force: bool=True) -> Path:
+
+def download(url: str, data_dir: Union[str, Path], force: bool=True) -> Path:
     """
-    Download the dataset from 
-    
-        https://cdn-files.soa.org/research/ilec/ilec-2009-18-20210528.zip
-    
-    and decompress 'ILEC 2009-18 20210528.csv' contained therein.
+    Download the dataset from the given url.
 
-    Both files will be saved into the directory.
+    Return the path of the extracted csv.
 
+    Both files will be in the given directory.
     Time:
         might take 5min to downlad, 2min to unzip.
-
-    Return the full path of the unzipped csv file as Path object
     """
-
-    # download
-    download_dir =  Path(data_dir) # to turn into Path instance
-    fn  = "ilec-2009-18-20210528.zip"
-    thezip = download_dir / fn
+    data_dir =  Path(data_dir)
+    fn = Path(url).name
+    thezip = data_dir / fn # where the zip will land
 
     logger.info(f'Downloading {fn}')
-    urllib.request.urlretrieve(f"https://cdn-files.soa.org/research/ilec/{fn}", thezip)
+    urllib.request.urlretrieve(url, thezip)
     logger.info('Download complete')
    
-    # Unzip
     logger.info(f'Decompressing {fn}')
     zf = ZipFile(thezip)
-    assert(zf.filelist[0].filename==fn_csv) # this is the file that should be in the zip
-    zf.extractall(download_dir) # extract into that same directory
-    logger.info('Decompressed')
-    return download_dir / fn_csv # is only one file, 'ILEC 2009-18 20210528.csv'
+    if len(zf.filelist) >1:
+        logger.warning('The archive contains multiple files: {}'.format('; '.join(zf.filelist)))
 
+    i = 0
+    fn_csv = Path(zf.filelist[i].filename)
+    while (i < len(zf.filelist)) and fn_csv.suffix.lower() != '.csv': # keep looking
+        i+=1
+        fn_csv = Path(zf.filelist[i].filename)
 
-def read_csv(data_dir: Union[str, Path], chunksize: int=500000) -> pd.DataFrame:
-    """Read in  the downloaded csv at the given filename  and return a dataframe.
+    # Make sure found a csv
+    if fn_csv.suffix.lower() != '.csv':
+        logger.error('No CSVs in the archive, ending')
+        return
+    zf.extract(member=str(fn_csv), path=str(data_dir)) # extract into that same directory
+    logger.info(f'Decompressed {fn_csv}')
+
+    return data_dir / fn_csv
+
+def read_csv(fn_csv: Union[str, Path], chunksize: int=500000) -> pd.DataFrame:
+    """Read in  the downloaded csv at the given filename and return a dataframe.
     This function specifies data types of certain ambiguous columns and reads in chunks.
-    It also saves a pkl and a parquet of the data.
+    It also saves a pkl and a parquet of the data, with no changes in the column names, just as read in.
     """
-    data_dir = Path(data_dir)
-    ffn_csv = data_dir / fn_csv
-    logger.info('Reading original csv')
+    fn_csv = Path(fn_csv) # make sure have Path
+    logger.info(f'Reading original csv {fn_csv}')
     # the number of row in each data frame read in as a chunk
     i = 0
     # the list that contains all the dataframes
     list_of_dataframes = []
-    for df in pd.read_csv(ffn_csv, chunksize=chunksize, 
+    for df in pd.read_csv(fn_csv, chunksize=chunksize,
         # a few columns have nulls and need a specified type (float64), others do not need the full default integral type.
         dtype={ fld:dtyp
                 for dtyp, flds
@@ -99,86 +122,94 @@ def read_csv(data_dir: Union[str, Path], chunksize: int=500000) -> pd.DataFrame:
     data = pd.concat(list_of_dataframes)
     logger.info(f"...concatenated, {len(data):,.0f} records in result.")
     data.index.name = 'row' # as was unnamed in original file
-    save_pkl_parquet(data, data_dir)
+    save_pkl_parquet(data, fn_csv)
     return data
 
 
-def save_pkl_parquet(data: pd.DataFrame, data_dir: Union[str, Path]):
-    """Save the data frame as a pickle and as a parquet, both of which are much faster to read and include data type info.
+def save_pkl_parquet(data: pd.DataFrame, fn_csv: Union[str, Path]):
+    """Save the data frame as a pickle and as a parquet, both of which are much faster
+    to read and include data type info.
+
     Pass the filename from which the csv was read.
-    The pickle will have the extension pkl, and the parquet will have parquet.
+
+    The pickle will have the extension pkl, and the parquet will have parquet, saved in the same directory.
     """
-    data_dir = Path(data_dir)
-    ffn_csv = data_dir / fn_csv
+    fn_csv = Path(fn_csv) # make sure get a Path object
     # save as a pickle
     logger.info('Saving pkl...')
-    data.to_pickle(ffn_csv.with_suffix('.pkl'), protocol=4)
+    data.to_pickle(fn_csv.with_suffix('.pkl'), protocol=4)
     logger.info('...saved.')
 
-    # save nonpartitioned
+    # save nonpartitioned parquet
     logger.info('Saving parquet...')
-    data.to_parquet(ffn_csv.with_suffix('.parquet'), engine='pyarrow')
+    data.to_parquet(fn_csv.with_suffix('.parquet'), engine='pyarrow')
     logger.info('... saved.')
 
 
-def make_v1(data: pd.DataFrame, data_dir: Union[str, Path])->pd.DataFrame:
+def make_v1(data: pd.DataFrame, fn_csv: Union[str, Path])->pd.DataFrame:
     """Make v1 of the data, save parquet, and return it.
     1. lower-case names with underscores instead of spaces: renamed as with utilities.NEW_NAMES
     2. Fill preferred_class and number_of_preferred_classes with 1s instead of nulls, convert to smaller type
     3. Makes field 'uw' that is smoker status / number of preferred classes / preferred class
     4. Make columns band_min, band_max for max and min of face band
-    Saves as parquet file _v1.parquet
+
+    Saves as
+        _v1.parquet
+        _v1.pkl using pickle  protocol 4
     """
-    data.columns = [c.lower().replace(' ', '_') for c in data.columns]
+    data.columns = [c.lower().replace(' ', '_') for c in data.columns] # is faster than rename
+    from .utilities import NEW_NAMES
+    data.columns = [NEW_NAMES.get(c,c) for c in data.columns] # renaming in place was slow
     # convert preferred fields to integers, must plug nulls, 1 makes sense
     for c in ['preferred_class', 'number_of_preferred_classes']:
         data[c] = data[c].fillna(1).astype(np.int8)
-
-    from .utilities import NEW_NAMES
-
-    data.columns = [NEW_NAMES.get(c,c) for c in data.columns] # renaming in place was slow
 
     logger.info('set uw column')
     data['uw'] = (data['smoker_status'].str[0] 
                       +'/'+ data['number_of_preferred_classes'].astype(str)
                       +'/'+ data['preferred_class'].astype(str))
-
     logger.info('set band min, band max')
     fb = set(data.face_amount_band) # the distinct values
+
     # Dictionaries for low and high amounts: 
     fba = {_b:float(_b.replace('+','-1000000000').split('-')[0].strip()) for _b in fb}
     fbb = {_b:float(_b.replace('+','-1000000000').split('-')[1].strip()) for _b in fb}
     data['band_min'] = data['face_amount_band'].map(fba)
     data['band_max'] = data['face_amount_band'].map(fbb)
 
-    logger.info('saving parquet...')
-    data.to_parquet(Path.joinpath(Path(data_dir), 'ILEC 2009-18 20210528_v1.parquet'), engine='pyarrow')
+    logger.info('Saving parquet...')
+    fnv1 = (fn_csv.parent / (fn_csv.stem + '_v1')).with_suffix('.parquet')
+    data.to_parquet(fnv1, engine='pyarrow')
+    logger.info(f'Saved v1: {fnv1}')
     return data
 
 
-def make_v2(data: pd.DataFrame, data_dir: Union[str, Path]) -> pd.DataFrame:
+def make_v2(data: pd.DataFrame, fn_csv: Union[str, Path]) -> pd.DataFrame:
     """Make v2 of data and save as parquet.
-    1. drop rows for minors, i.e. keep only adjusts, issue ages 18+
-    2. drop rows for study years >2017, i.e. 2018
-    2. drop columns for moments and industry tables besides 2015vbt
+
+    data must be output from make_v1.
+
+    1. Includes only adults
+    2. Excludes columns for moments and for industry tables besides 2015vbt
     """
-    logger.info('Dropping rows for minors, observation year >2017')
-    data = data[(data.issue_age>17) & (data.observation_year<=2017)]
-    import re
+
+    logger.info('Dropping rows for minors')
+    data = data[(data.issue_age>17)]
     logger.info('Dropping columns for moments, industry tables besides 2015vbt')
+    import re
     data = data.drop(columns=[c for c in data.columns if re.match(r'.*(7580|2001|2008|_cen\d)', c)])
     logger.info('Saving as parquet')
-    data.to_parquet(Path.joinpath(Path(data_dir), 'ILEC 2009-18 20210528_v2.parquet'), engine='pyarrow')
-    logger.info('v2 saved.')
+    fnv2 = (fn_csv.parent / (fn_csv.stem + '_v2')).with_suffix('.parquet')
+    data.to_parquet(fnv2, engine='pyarrow')
+    logger.info(f'Saved v2: {fnv2}')
     return data
 
-
-def prepare_all(data_dir: Union[str, Path])->pd.DataFrame:
-    """Download the file and prepare the parquet files."""
-    
-    download(data_dir)
-    d = read_csv(data_dir)
-    d = make_v1(d, data_dir)
-    d = make_v2(d, data_dir)
+def prepare_all(url: Union[str, Path], data_dir: Union[str, Path])->pd.DataFrame:
+    """Download the zip from the url and prepare the parquet files."""
+    assert(Path(url).suffix.lower()=='.zip')
+    fn_csv = download(url, data_dir)
+    d = read_csv(fn_csv)
+    d = make_v1(d, fn_csv)
+    d = make_v2(d, fn_csv)
     return d
 
