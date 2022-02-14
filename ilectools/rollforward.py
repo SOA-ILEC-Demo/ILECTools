@@ -9,8 +9,7 @@ save_data: FIX - MAKE THIS: saves the pkls, makes from the downloaded files
 
 """
 
-
-from matplotlib import pyplot as plt
+import matplotlib as mpl, matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 
@@ -27,61 +26,6 @@ cols_valact_rf= ['issue_age',
  'gender',
  'duration',
  'smoker_status']
-
-def preprocess(data_dir: UNION[str, Path]):
-    """Preprocess the text file downloaded from the SOA into other files that are
-    faster to load, and with columns renamed.
-    """
-    # takes 2-2:30 or so to read from txt depending on drive type
-    # takes 5 min for all this
-    data_full = pd.read_csv(data_dir / '2009-15 Data 20180601.txt', sep='\t')
-    # replace spaces in column names with underscores; make lower case
-    data_full.rename(columns=lambda c: c.replace(' ', '_').lower(), inplace=True) 
-
-    # fill empties with 1 as was blank.  Despite the name 'number of preferred classes', 
-    # the field shows the # of classes, not preferred classes.
-    data_full['number_of_preferred_classes'] = data_full.number_of_preferred_classes.fillna(1).map(int) 
-    # fill empties with 1 as was blank where number_of_preferred_classes was 1 and should be blank.  Is # of classes, not preferred classes.
-    data_full['preferred_class'] = data_full.preferred_class.fillna(1).map(int) 
-    # Make one field to show all the UW info: smoker, # classes, which class.
-    data_full['uw'] = data_full.apply(lambda s: '{}/{}/{}'.format(s['smoker_status'][0]
-                                                                  , s['number_of_preferred_classes']
-                                                                  , s['preferred_class']) , axis=1)
-    
-    # Remove whitespace around insurance plan labelsyr
-    data_full['insurance_plan'] = data_full['insurance_plan'].map(lambda a: a.strip())
-
-    # Add bounds of face fields: min and max: as floating values.
-    # Fields created are band_min and band_max.  High band max plugged to 1000000000.
-    fb = set(data_full.face_amount_band) # the distinct values
-    # Dictionaries for low and high amounts: 
-    fba = {_b:float(_b.replace('+','-').split('-')[0].strip()) for _b in fb}
-    fbb = {_b:float(_b.replace('+','-1000000000').split('-')[1].strip()) for _b in fb}
-    data_full['band_min'] = data_full['face_amount_band'].map(fba)
-    data_full['band_max'] = data_full['face_amount_band'].map(fbb)
-    
-    # Renaming columns for convenience and consistency of name components (metric_item where metric = policy or amount)
-    newnames = {'number_of_deaths':'policy_act'
-                , 'death_claim_amount':'amount_act'
-                , 'policies_exposed':'policy_xps'
-                , 'amount_exposed':'amount_xps'}
-    for _ in ['expected_death_qx7580e_by_amount',
-           'expected_death_qx2001vbt_by_amount',
-           'expected_death_qx2008vbt_by_amount',
-           'expected_death_qx2008vbtlu_by_amount',
-           'expected_death_qx2015vbt_by_amount',    
-           'expected_death_qx7580e_by_policy',
-           'expected_death_qx2001vbt_by_policy',
-           'expected_death_qx2008vbt_by_policy',
-           'expected_death_qx2008vbtlu_by_policy',
-           'expected_death_qx2015vbt_by_policy']:
-        newnames.update({_:'{}_{}'.format(_.split('_')[-1], _.split('_')[2][2:])})
-    data_full.rename(columns=newnames, inplace=True)
-    
-    # takes abt 1:30 to write
-    data_full.to_pickle('/mnt/strix0/brian/ilec/2009-15 Data 20180601.pkl', protocol=4)
-    dat = data_full[data_full.issue_age>17] # only adults
-    dat.to_pickle('/mnt/strix0/brian/ilec/2009-15_data_adults.pkl', protocol=4)
 
 
 class Rollforward():
@@ -112,7 +56,7 @@ Functions
     
     def __init__(self, title, dat, keys,  **kwargs):
         """Pass 
-        dat: dataframe, data to use: must have observation_year, amount_act, amount_2015vbt, amount_xps
+        dat: dataframe, data to use: must have observation_year, amount_actual, amount_2015vbt, amount_exposure
         keys: the column names by which to split
     optional kwargs:
         title='Untitled'
@@ -123,7 +67,7 @@ Functions
         metric = kwargs.pop('metric', 'amount')
         self.metric = metric
         # Make sure observation_year is there and in the innermost level
-        a,t,x = ['act','2015vbt','xps'] # actuals, tabulars, exposure
+        a,t,x = ['actual','2015vbt','exposure'] # actuals, tabulars, exposure
         # summarize at the desired level of granularity within each year
         pt = dat.pivot_table(index = list(set(keys).difference(['observation_year'])) + ['observation_year']
                             , values=['_'.join([metric,i]) for i in (a,t,x)]
