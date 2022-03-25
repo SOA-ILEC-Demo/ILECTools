@@ -13,7 +13,7 @@ import matplotlib as mpl, matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 
-
+from IPython.display import HTML
 
 
 # columns in valact: for the detailed split for decomp?
@@ -45,12 +45,12 @@ Attributes:
         r_bf: same as r: is r filling nulls by going backward then forward
         r_fb: is r filling nulls by going forward then backward
 
-Functions
+Functions - main ones
     R_vs_mean_weights
     diagnostics
     show_dr_dw
     show
-    
+    waterfall
     
     """
     
@@ -149,11 +149,13 @@ Functions
         , pd.DataFrame({'# recs':(self.dr.fillna(0)==0).sum()
                  ,'% recs':((self.dr==0)*1.).sum()/self.dr.shape[0]
                  ,'weight':((self.dr==0)*self.dw).sum()
-                 }).style.format({'# recs':'{:,.0f}', '% recs':'{:,.1%}', 'weight':'{:,.1%}'}).set_caption("where dr=0:").render()
+                 }).style.format({'# recs':'{:,.0f}', '% recs':'{:,.1%}', 'weight':'{:,.1%}'}
+                                 ).set_caption("where dr=0:").to_html()
         , pd.DataFrame({'# recs':w0.sum()
                          ,'% recs':1.*w0.sum()/self.dr.shape[0]
                          ,'weight':(w0*self.dw).sum()
-                                 }).style.format({'# recs':'{:,.0f}', '% recs':'{:,.1%}', 'weight':'{:,.1%}'}).set_caption("where w=0 in this year or next:").render()
+                                 }).style.format({'# recs':'{:,.0f}', '% recs':'{:,.1%}', 'weight':'{:,.1%}'}
+                                                 ).set_caption("where w=0 in this year or next:").to_html()
 
         ))
     
