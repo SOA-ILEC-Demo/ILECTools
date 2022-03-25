@@ -24,11 +24,8 @@ Things I want to do
 2018 file: 2009-16
 2021 file: 2009-18 but only ny for 2018
 
-I think: key off of year file published.  Attributes:
-url
-csv fn
-other fns
 '''
+
 # URLS gives the public URL by year in which the dataset was made public.
 # I'm not providing context here, that context is on the appropriate site.
 import pandas as pd, numpy as np, os, datetime as dt
