@@ -3,4 +3,5 @@
 #Compressed files
 *.pyc
 *__pycache__
-
+#jupyter files
+.ipynb_checkpoints
