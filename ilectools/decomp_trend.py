@@ -9,11 +9,11 @@ def fill_between(ax, a, da):
     """red when go down frmo a to a + da; blue when go up from a to b.
     NOT USED in final - I went to the bar graphs."""
     x = range(len(a))
-    ax.fill_between(x, a.values, (a+da.apply(lambda x: min(x,0))).values, color=(1, 0.7, 0.7), linewidth=0) # going down
-    ax.fill_between(x, a.values, (a+da.apply(lambda x: max(x,0))).values, color=(0.7, 0.7, 1), linewidth=0) # blue going up
-    ax.plot(x, a.values, color='k', linewidth=0.5) # the mean, same in all as a reference point
-    ax.plot(x, (a+da).values, color='k', linewidth=1) # the result
-    ax.plot(x, 0*a.values, color=(0.5, 0.5, 0.5)) # 0 on the y axis
+    ax.fill_between(x, a.values, (a+da.apply(lambda x: min(x, 0))).values, color=(1, 0.7, 0.7), linewidth=0) # going down
+    ax.fill_between(x, a.values, (a+da.apply(lambda x: max(x, 0))).values, color=(0.7, 0.7, 1), linewidth=0) # blue going up
+    ax.plot(x, a.values, color='k', linewidth=0.5)  # the mean, same in all as a reference point
+    ax.plot(x, (a+da).values, color='k', linewidth=1)  # the result
+    ax.plot(x, 0*a.values, color=(0.5, 0.5, 0.5))  # 0 on the y axis
     # Prettification
     ax.set_xticklabels([])
     ax.set_xticks([])
@@ -22,11 +22,10 @@ def fill_between(ax, a, da):
     ax.set_frame_on(False)
 
     
-def getComp(x):
+def get_comp(x):
     # Turn vector into composition
     a = (x / x.sum()).replace(0., 10**-20)
     return np.log(a[1:].values/a.values[0])
-
 
 
 # https://matplotlib.org/api/_as_gen/matplotlib.axes.Axes.set_anchor.html#matplotlib.axes.Axes.set_anchor
@@ -37,14 +36,11 @@ def add_axes(ax, x, y, w, h, anchor='C', **kwargs):
     Anchor can be N, S, E, W, C.
     other kwargs go to figure.add_axes"""
     # get left, bottom: convert axes coordinates to figure coordinates, shift half the w, h left
-    lb = ax.figure.transFigure.inverted().transform(ax.transData.transform([x,y]))
+    lb = ax.figure.transFigure.inverted().transform(ax.transData.transform([x, y]))
     d  = 0.5*np.array([w,h]) # offset vector: in proportion of width
-    lb = lb - d + d * np.array([[0,0], [0,-1], [0,1], [1,0], [-1,0]])['CNSEW'.index(anchor)]  # offset vectors for N,S,E,W:
+    lb = lb - d + d * np.array([[0, 0], [0, -1], [0, 1], [1, 0], [-1, 0]])['CNSEW'.index(anchor)]
+    # ... offset vectors for N,S,E,W
     return ax.figure.add_axes([*tuple(lb),w,h], **kwargs)
-
-
-
-
 
     
 def category_bars(ax, df, **kwargs):
@@ -72,8 +68,7 @@ kwargs:
     return ax
 
 
-
-class decomposer(object):
+class Decomposer(object):
     """Class with decomposition analysis and presentation functions"""
     
     def __init__(self, df, coda=False):
@@ -86,11 +81,11 @@ coda=False: whether to transform into a composition before decomposition
         
         a = df.div(df.sum()) # the distribution
         if coda:
-            a = a.apply(getComp) # applies to each column
+            a = a.apply(get_comp) # applies to each column
         mu = a.mean(axis=1)  # the mean by year (across columns)
         ac = a.sub(mu, axis=0) # center: subtract the mean (ac = a centered)
         # svd:
-        u, s, v = np.linalg.svd(ac.values, full_matrices=False);
+        u, s, v = np.linalg.svd(ac.values, full_matrices=False)
         v = v.T
         
         # row labels to use
@@ -109,7 +104,6 @@ coda=False: whether to transform into a composition before decomposition
         self.mu = pd.Series(mu, index=rws)
         self.a  = a
         self.ac = ac
-
 
         
     def plot2d(self, **kwargs):
@@ -170,7 +164,6 @@ ax_label_scale = 1.0: the labels are this scale times the singular vector for th
 
         ax.axhline(y=0, color='k')
         ax.axvline(x=0, color='k')
-
 
         return fig, ax
 
