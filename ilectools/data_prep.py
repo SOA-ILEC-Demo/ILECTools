@@ -145,10 +145,12 @@ def save_pkl_parquet(data: pd.DataFrame, fn_csv: Union[str, Path]):
 
 def make_v1(data: pd.DataFrame, fn_csv: Union[str, Path])->pd.DataFrame:
     """Make v1 of the data, save parquet, and return it.
-    1. lower-case names with underscores instead of spaces: renamed as with utilities.NEW_NAMES
+    1. lower-case field (column) names with underscores instead of spaces: renamed as with utilities.NEW_NAMES
     2. Fill preferred_class and number_of_preferred_classes with 1s instead of nulls, convert to smaller type
     3. Makes field 'uw' that is smoker status / number of preferred classes / preferred class
     4. Make columns band_min, band_max for max and min of face band
+    5. Strip leading and trailing spaces from products
+    6. Make smoker_status proper case so capitalization is consistent with Unknown and UNKNOWN and no caps inSide a wORd
 
     Saves as
         _v1.parquet
@@ -157,6 +159,8 @@ def make_v1(data: pd.DataFrame, fn_csv: Union[str, Path])->pd.DataFrame:
     data.columns = [c.lower().replace(' ', '_') for c in data.columns] # is faster than rename
     from .utilities import NEW_NAMES
     data.columns = [NEW_NAMES.get(c,c) for c in data.columns] # renaming in place was slow
+    data['insurance_plan'] = data['insurance_plan'].str.strip()
+    data['smoker_status'] = data['smoker_status'].str.title()
     # convert preferred fields to integers, must plug nulls, 1 makes sense
     for c in ['preferred_class', 'number_of_preferred_classes']:
         data[c] = data[c].fillna(1).astype(np.int8)
