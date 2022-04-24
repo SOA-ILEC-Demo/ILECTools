@@ -47,27 +47,29 @@ def add_axes(ax, x, y, w, h, anchor='C', **kwargs):
     return ax.figure.add_axes([*tuple(lb), w, h], **kwargs)
 
     
-def category_bars(ax, df, **kwargs):
-    """1st column of df is plotted as outline of a bar,  intended to be the mean.
-    2nd column is solid bar of a bar.
+def singular_vector_subgraph(ax, df, kind='bar'):
+    """
+    if kind='bar':
+        1st column of df is plotted as outline of a bar,  intended to be the mean.
+        2nd column is solid bar for the axis being shown.
+    if kind='
     
-kwargs:
-    show_xaxis: whether to shwo labels, x axis
-"""
-    legend = False
-    show_xaxis = kwargs.pop('show_xaxis', False)
-    grph = dict(kind='bar', width=0.9, ax=ax,  legend=legend)  # for all bars
-    barparm = [dict(fill=False, edgecolor='k', linewidth=0.5)  # for each series in turn
-              , dict(color='r', alpha=0.4)]
-    for c, bp in zip(df.columns, barparm):
-        df[[c]].plot(**grph, **bp)
-    
-    if show_xaxis:        # nice x tick labels if they fit: rotate into the bar, and padd them
-        plt.setp( ax.xaxis.get_majorticklabels(), rotation=90, ha='left', rotation_mode="anchor")  # rotate up into bar
-        ax.set_xticklabels([' '*4+t.get_text() for t in ax.get_xticklabels()])  # add padd to put start up above x axis
+        show_xaxis: whether to show labels, x axis
+    """
+    if kind=='bar':
+        grph = dict(kind=kind, width=0.9, ax=ax,  legend=False)  # for all bars
+        df.iloc[:, 0].plot(**grph, fill=False, edgecolor='k', linewidth=0.5) # for the mean of all points
+        df.iloc[:, 1].plot(**grph, color='r', alpha=0.4)  # for the particular axis
+        # nice x tick labels if they fit: rotate into the bar, and pad them
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=90, ha='left', rotation_mode="anchor")  # rotate up into bar
+        ax.set_xticklabels([' ' * 4 + t.get_text()
+                            for t in ax.get_xticklabels()
+                            ])  # add padd to put start up above x axis
+    elif kind=='line':
+        df.plot(ax=ax, ylim=0, legend=False, kind=kind, style=['k-', 'r-'])
     else:
-        ax.get_xaxis().set_visible(False)
-    # % fmt on x axis
+        pass # assert(False) # kind must be 'bar' or 'line'
+
     ax.yaxis.set_major_formatter(mpl.ticker.FuncFormatter('{:,.0%}'.format))
     return ax
 
@@ -109,7 +111,7 @@ coda=False: whether to transform into a composition before decomposition
         self.ac = ac
 
         
-    def plot2d(self, show_xaxis=False, ax_label_scale=1.0, ax=None):
+    def plot2d(self, ax_label_scale=1.0, ax=None):
         """
         Plot decomposition in 2D, with axis labels
             args:
@@ -130,41 +132,38 @@ coda=False: whether to transform into a composition before decomposition
         _n = u.index.name # name of item by which years split out
 
         # Plot the line of the years (the time series)
-        sv.plot(0, 1, style='.-', ax=ax, title=_n, legend=False, grid=True)
+        sv.plot(0, 1, style='.-', ax=ax, legend=False, grid=True)
 
         # Label the points by year
         for i in sv.index: # year goes down rows
             ax.text(sv.loc[i,0], sv.loc[i,1], str(i))
 
         # Show more space on the graph to be sure the points won't be on the edges
-        _c = 1.1  # to scale: center 0, allow margin around edges
+        _c = 1.25  # to scale: center 0, allow margin around edges
         ax.set_xlim(*(_c * sv[0].map(np.abs).max() * np.array([-1, 1])))
         # keep same scale on y axes so it's clear that the x axis covers more spread
-        ax.set_ylim(*(_c * sv[1].map(np.abs).max() * np.array([-1, 1])))
+        ax.set_ylim(*(np.array(ax.get_xlim()) * ax.get_window_extent().height / ax.get_window_extent().width ))
 
-        # for x, y axes labels: a dataframe of the bars
-        df_bars = pd.DataFrame({'mean':mu
-                                , 'x': mu + ax_label_scale * u[0] * sv[0].max() # x axis label
-                                , 'y': mu + ax_label_scale * u[1] * sv[1].max()  # y axis label
+        # for x, y axes labels: a dataframe of the mean, and differencs from that for x and y to show
+        sv_labels = pd.DataFrame({'mean': mu,
+                                 'x': mu + ax_label_scale * u[0] * sv[0].max(), # x axis label
+                                 'y': mu + ax_label_scale * u[1] * sv[1].max()  # y axis label
                                })
 
-        # not used at moment: the type of axis label
-        k = {'issue_age':'line', 'duration':'line'}.get(_n, 'bar')
-        
         # Plot x axis label graph.
-        scales= [ax.get_xlim()[1], ax.get_ylim()[1]] # scales of singular vectors to use
-        category_bars(add_axes(ax, ax.get_xlim()[1]*1.02, 0, 0.3, 0.3, anchor='E', alpha=0.02)
-                      , df_bars[['mean', 'x']]
-                      , show_xaxis=show_xaxis)
+        kind = 'line' if self.df.index.is_numeric() and len(self.df)>15 else 'bar'
+        singular_vector_subgraph(add_axes(ax, ax.get_xlim()[1]*1.2, 0, 0.3, 0.3, anchor='E', alpha=0.02)
+                      , sv_labels[['mean', 'x']]
+                      , kind=kind)
 
         # Plot the y axis label.
-        category_bars(add_axes(ax, 0, ax.get_ylim()[1]*1.02, 0.3, 0.3, anchor='S', alpha=0.02)
-                      , df_bars[['mean', 'y']]
-                      , show_xaxis=show_xaxis)    
+        singular_vector_subgraph(add_axes(ax, 0, ax.get_ylim()[1]*1.2, 0.3, 0.3, anchor='S', alpha=0.02)
+                      , sv_labels[['mean', 'y']]
+                      , kind=kind)
 
         # Axis lines through the origin
         ax.axhline(y=0, color='k')
         ax.axvline(x=0, color='k')
-
+        fig.set_dpi(150)
         return fig, ax
 
