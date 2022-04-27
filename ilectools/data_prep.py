@@ -20,7 +20,7 @@ Things I want to do
 * pass a directory and date and get that version
 * pass a year and get that version
 
-
+2017 file: 2001-13
 2018 file: 2009-16
 2021 file: 2009-18 but only ny for 2018
 
@@ -29,9 +29,6 @@ Things I want to do
 # URLS gives the public URL by year in which the dataset was made public.
 # I'm not providing context here, that context is on the appropriate site.
 import pandas as pd, numpy as np, os, datetime as dt
-
-
-
 import urllib
 import urllib.request
 from pathlib import Path
@@ -49,7 +46,9 @@ logger.setLevel(logging.INFO)
 
 # Constants
 URLS = {2021: 'https://cdn-files.soa.org/research/ilec/ilec-2009-18-20210528.zip',
-        2018: 'https://cdn-files.soa.org/web/ilec-2016/ilec-data-set.zip'}
+        2018: 'https://cdn-files.soa.org/web/ilec-2016/ilec-data-set.zip',
+        2017: 'http://cdn-files.soa.org/web/2009-13-indiv-life-ins-mort-exp-pivot.zip'
+        }
 
 
 def download(url: str, data_dir: Union[str, Path], force: bool=True) -> Path:
@@ -62,7 +61,7 @@ def download(url: str, data_dir: Union[str, Path], force: bool=True) -> Path:
     Time:
         might take 5min to downlad, 2min to unzip.
     """
-    data_dir =  Path(data_dir)
+    data_dir = Path(data_dir)
     fn = Path(url).name
     thezip = data_dir / fn # where the zip will land
 
