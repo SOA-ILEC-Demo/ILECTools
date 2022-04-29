@@ -113,7 +113,9 @@ def read_csv(fn_csv: Union[str, Path], chunksize: int=500000) -> pd.DataFrame:
                  ):
         logger.info(f'{i*chunksize:,.0f} records')
         i+=1
-        list_of_dataframes.append(df.set_index(df.columns[0])) # the 1st column is a row number, which we ought to keep for reference
+        if df.columns[0].lower() != 'observation_year': # is a row number, make it index
+            df = df.set_index(df.columns[0])
+        list_of_dataframes.append(df)
     logger.info('... read.  Concatenating:')
     data = pd.concat(list_of_dataframes)
     logger.info(f"...concatenated, {len(data):,.0f} records in result.")

@@ -6,22 +6,7 @@ from datetime import datetime as dt
 #http://statsmodels.sourceforge.net/devel/gettingstarted.html
 import statsmodels.api as sm, statsmodels.formula.api as smf, patsy
 from patsy import dmatrices
-pd.options.display.max_rows=255
 
-def ff(fmt):
-    pd.options.display.float_format = fmt.format
-
-# http://stackoverflow.com/questions/19470099/view-pdf-image-in-an-ipython-notebook
-class PDF(object):
-  def __init__(self, pdf, size=(200,200)):
-    self.pdf = pdf
-    self.size = size
-
-  def _repr_html_(self):
-    return '<iframe src={0} width={1[0]} height={1[1]}></iframe>'.format(self.pdf, self.size)
-
-  def _repr_latex_(self):
-    return r'\includegraphics[width=1.0\textwidth]{{{0}}}'.format(self.pdf)
 
 #I need the correct face band ordering.
 faceBands = [
@@ -51,7 +36,7 @@ values: the values to be added
 
 """
     values = kwargs.pop('values', ['number_of_claims', 'policies_exposed'] +
-                            map('expected_claim_qx{}vbt_by_policy'.format, [2008, 2015]))
+                        map('expected_claim_qx{}vbt_by_policy'.format, [2008, 2015]))
     res = data.pivot_table(index = indexColumns
         , values=values
         , aggfunc=np.sum
@@ -62,11 +47,11 @@ values: the values to be added
 def isPLT(s):
     """Tell whether is PLT, apply to """
     if 'yr anticipated' in s.anticipated_level_term_period:
-        t = int(s['anticipated_level_term_period'].strip().split(' ')[0]);
+        t = int(s['anticipated_level_term_period'].strip().split(' ')[0])
         d = int(s['duration_group'].strip().replace('+','').split('-')[0])
         if t < d:
-            return 'Y';
-    return 'N';s
+            return 'Y'
+    return 'N'
 
 ######################################################################################################################
 
@@ -100,21 +85,21 @@ def getKV(k):
     """Get key, value from label, value in the parameters"""
     if k=='Intercept':
         return ('Intercept','Intercept')
-    m = re.match(r"^C\((.*)\)\[(.*.)]$", k) # has C in name to show is a category
+    m = re.match(r"^C\((.*)\)\[(.*.)]$", k)  # has C in name to show is a category
     if m: #has C()
         m  = m.groups()
         m1 = list(m[1:])
-        res = tuple([m[0].split(',')[0]]+m1) #remove "treatment" if there in 1st one
+        res = tuple([m[0].split(',')[0]]+m1)  # remove "treatment" if there in 1st one
     else:
-        m = re.match(r"^(.*)\[(.*.)]$", k) #lacks C showing cateogry
+        m = re.match(r"^(.*)\[(.*.)]$", k)  # lacks C showing cateogry
 
         if m:
             res = m.groups()
         else:
-            return k; #just don't do anything
-         #If field value is an integer then return it.
+            return k # just don't do anything
+            # If field value is an integer then return it.
     if res[1][:2]=='T.':
-        res = (res[0], res[1][2:]); # Strip the T. at the start of the value, I'm not sure why it's there.
+        res = (res[0], res[1][2:]) # Strip the T. at the start of the value, I'm not sure why it's there.
     if re.match('^[\d]*$', res[1]) and res[1][0]!='0': # keep leading zeros if any, works better w/keys I have so far
         res = (res[0], int(res[1]))
     return res
@@ -122,7 +107,7 @@ def getKV(k):
 def getKVs(k):
     """Get the KVs where multiple cross combinations are present."""
     if ':' in k: 
-        return pd.Series({_k:_v for _k,_v in map(getKV, k.split(':'))})
+        return pd.Series({_k: _v for _k, _v in map(getKV, k.split(':'))})
     else:
         return getKV(k)
     
@@ -155,7 +140,8 @@ def fitGLM(data, formula, offsetcol):
     print(dt.now(), '... fit.')
     fit.offsetcol = offsetcol # to keep the name
     return fit
-    
+
+
 def offsetColumnName(fit):
     """Get the offset column name since the fit doesn't save it.  Assign it to attribute offsetColumnName of fit."""
     data = fit.model.data.frame # data in the model, for convenience
@@ -170,6 +156,7 @@ def offsetColumnName(fit):
     rse = pd.Series({_c: np.linalg.norm(data[_c]-invoffset) for _c in numericColumns})
     setattr(fit, 'offsetcol', rse[rse==rse.min()].index[0])
     return fit.offsetcol
+
 
 class glmrun(object):
     """fit             "fit" instance, sved value of glm.fit()
@@ -195,15 +182,15 @@ class glmrun(object):
         
     def addPred(self, predname):
         addPred(self, predname) #addPred function takes this glmrun instance, uses its data and appends column to that.
-        return self; # so can chain like d3
+        return self # so can chain like d3
 
     def prettyParams(self):
         """Prettify the parameters: also add 1 where don't have one."""
         vals = {getKV(_k):_v for _k,_v in self.fit.params.to_dict().items()}
         s = pd.Series(vals)
-        data = self.fit.model.data.frame; # for convenience
+        data = self.fit.model.data.frame # for convenience
         #for each column, get any missing values - such as defaults, set their factor to 1 (not for Intercept - there's no corresponding column)
-        for c in s.index.levels[0]: 
+        for c in s.index.levels[0]:
             if c!='Intercept':
                 vals.update({(c, v):0. for v in list(set(data[c].value_counts().keys()).difference(set(s[c].index)))})
         return pd.Series(vals).sort_index()
@@ -225,19 +212,19 @@ class glmrun(object):
         """
         NOTE: I'm not using it.
         Write an exhibit about a report to the document, number is from doc.n_tab.
-Arguments:
-    doc: a "mydoc" document object to which to write
+        Arguments:
+            doc: a "mydoc" document object to which to write
 
-kwargs: 
-    show = True: whether to show in the IPython.notebook
+        kwargs:
+            show = True: whether to show in the IPython.notebook
 
-Show: 
-1. Formula
-2. A/T vs factor (policies)
-3. Graphs
+        Show:
+        1. Formula
+        2. A/T vs factor (policies)
+        3. Graphs
 
-A/Model table like exhibit G
-"""
+        A/Model table like exhibit G
+        """
         show = kwargs.pop('show', True)
 
         # TITLE
@@ -250,7 +237,7 @@ A/Model table like exhibit G
             dis.display(dis.HTML("<pre><span style='font-size:6;'>{}</span></pre>".format(self.fit.model.formula)))
 
             # Appendix G presentation but with this model
-            self.writeAppendixG(doc); 
+            self.writeAppendixG(doc)
 
             # A/T AND MODEL FACTOR COMPARISON: NEEDS WORK FOR BIVARIATE SPLITS 
             self.compareFactorsAEPlot(doc=doc, show=show) # Makes the picture, saves to doc.
@@ -267,7 +254,7 @@ A/Model table like exhibit G
         """Write the summary table of glm in a new landscape section.
         pass: mydoc object"""    
 
-        doc.landscapeSection(); # add a landscape section
+        doc.landscapeSection() # add a landscape section
         doc.add_paragraph('Model fit statistics: model {}'.format(self.name), style='Caption').paragraph_format.keep_with_next = True    
         smry = str(self.fit.summary().tables[1])
         r = doc.add_paragraph().add_run(smry)
@@ -304,7 +291,7 @@ A/Model table like exhibit G
 
                 # trying a bunch of things that arent' working
                 x = ({tuple([getKV(j)[1] for j in i.split(':')]):y
-                     for i,y in x.to_dict().items()})
+                     for i, y in x.to_dict().items()})
                 ks,vs = [], [] # to keep them ordered the same
                 for k,v in x.items():
                     ks.append(k)
@@ -338,17 +325,17 @@ A/Model table like exhibit G
         act = self.kwargs['formula'].split('~')[0].strip() #'number_of_claims' #Get from the formula.
         vbt = self.offsetcol # the expected, not generally an offset
         for _ax, _c in zip(ax.flatten(), lvls): # For each subplot, graph vs that index.
-            tmp = datsum.pivot_table(index=_c, values=[act, vbt], aggfunc=np.sum);
+            tmp = datsum.pivot_table(index=_c, values=[act, vbt], aggfunc=np.sum)
             tmpdf = pd.DataFrame({
                 ' factor':np.exp(pp[_c])
                 , 'A/E':(tmp[act]/tmp[vbt])
-                } );
+                } )
 
             #Reorder for two oddballs
             if _c=='Duration_Band':
                 tmpdf = tmpdf.loc[['(0, 5]', '(5, 10]', '(10, 15]', '(15, 20]', '(20, 25]']]
             elif _c=='Face_Amount_Band':
-                tmpdf = tmpdf.loc[faceBands];
+                tmpdf = tmpdf.loc[faceBands]
 
             tmpdf.plot(style=['ko-','bo-'], rot=90, ax=_ax, legend=True)
             # Show all indices if any are string (otherwise they're numeric)
@@ -369,7 +356,7 @@ A/Model table like exhibit G
         """
         a,e = self.fit.model.formula.split('~')[0].strip(), self.fit.offsetcol # column names for actual and expected
         df  = self.fit.model.data.frame # The data
-        coefOrig = self.getCoef(); # Coefficients as expressed by the results.
+        coefOrig = self.getCoef() # Coefficients as expressed by the results.
 
         # comp is a list of dataframes: index is categories, maybe multiindex; columns are a/table and factor.
         comp = []
@@ -378,7 +365,7 @@ A/Model table like exhibit G
             ae = df.pivot_table(index = indexnames, values = [a,e], aggfunc=np.sum)
             ae = ae[a] / ae[e]
             # Now: append the factors.  Add 0 in shape of ae first to get the full index so adding series will work.
-            coefsum = addCoefs( [ae*0] + [c for c in coefOrig if c.index.names in sg] );
+            coefsum = addCoefs( [ae*0] + [c for c in coefOrig if c.index.names in sg] )
             tmp= pd.DataFrame({'Factor':np.exp(coefsum),'A/Table':ae}).sort_index()
             tmp.index.names = coefsum.index.names # they'll be the same.  For text categories the names didn't stay.
             comp.append(tmp)
@@ -395,10 +382,10 @@ A/Model table like exhibit G
         show_analysis = kwargs.pop('show_analysis', False)
 
         if kwargs.has_key('doc'):
-            doc = kwargs.pop('doc');
+            doc = kwargs.pop('doc')
             for c in comp:
-                # Save to doc;
-                compPlot(c);
+                # Save to doc
+                compPlot(c)
                 doc.add_fig('Model {}, Factors by {} vs Actual/VBT2015'.format(self.name, c.index.name))
                 if show_analysis:
                     # Skip the caption argument.  The title above should suffice.
@@ -406,7 +393,7 @@ A/Model table like exhibit G
         else:
             for c in comp:
                 compPlot(c)
-        return comp;
+        return comp
 
 
     def showFactorsVsTableBetweenCatgories(self, *args, **kwargs):
@@ -457,8 +444,8 @@ returns:
 
             ax.set_xlabel('Ratio of A/Table ratios between categories')
             ax.set_ylabel('Ratio of model factors between categories')
-            ax.set_ylim(0,2);
-            ax.set_xlim(0,2);
+            ax.set_ylim(0,2)
+            ax.set_xlim(0,2)
             
             if not kwargs.has_key('doc'):
                 ax.set_title('Relationships between Categories\nOf Raw A/Table Ratios and Categorical Factors\nFrom model '+self.name)
@@ -485,7 +472,7 @@ returns:
         """
         data = kwargs.pop('data', self.fit.model.data.frame)
         ofColumn  = kwargs.pop('ofColumn', self.fit.offsetcol)
-        return compFactorDist(self, data, ofColumn, indexColumn, forEach, plot);
+        return compFactorDist(self, data, ofColumn, indexColumn, forEach, plot)
 
     def compFactorAvg(self, forEach, *args, **kwargs):
         """Compare average factors weighted by the fit's offset column for different splits in forEach.
@@ -571,7 +558,7 @@ def compFactorDist(aGLMRun, data, ofColumn, indexColumn, forEach, plot=True):
         fig, ax = plt.subplots(1)
         dist.plot(kind='bar', ax=ax, rot=90, title='Distribution of {}'.format(ofColumn))
         fact.plot(secondary_y='Factor', ax=ax, rot=90)
-        ax.legend(loc='upper left', bbox_to_anchor=(1.1,1));
+        ax.legend(loc='upper left', bbox_to_anchor=(1.1,1))
     return pd.concat([fact, dist], axis=1).fillna(0)
 
 
@@ -580,7 +567,6 @@ def getDist(data, ofColumn, indexColumn, forEach):
     """Get distribution of value in ofColumn between categories of indexColumn, splitting by forEach (forEach is columns in result set)"""
     tmp = data.pivot_table(index=indexColumn, columns=forEach, values=ofColumn, aggfunc=np.sum)
     return tmp.div(tmp.sum(), axis=1)
-
 
 
 def compareAE(data, index, columns, *args, **kwargs):
