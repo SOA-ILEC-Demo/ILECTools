@@ -44,42 +44,8 @@ values: the values to be added
     res = res.reset_index()
     return res
 
-def isPLT(s):
-    """Tell whether is PLT, apply to """
-    if 'yr anticipated' in s.anticipated_level_term_period:
-        t = int(s['anticipated_level_term_period'].strip().split(' ')[0])
-        d = int(s['duration_group'].strip().replace('+','').split('-')[0])
-        if t < d:
-            return 'Y'
-    return 'N'
-
 ######################################################################################################################
 
-
-def addPred(aGLMRun, pairsNewOffset, **kwargs):
-    """Add the prediction as a column to data, in place.  
-    Use the column name 'predname' for the new column.
-arguments:
-    aGLMRun: a 'glmrun' object, just need its 'fit' attribute
-    parisNewOffset: list of pairs of column names: 
-        [(new fitted column name, offset column name)
-        , ... ]
-        ... so can calculate dependency matrix and then just run with multiple offsets like amount and then count
-
-kwargs:
-    data      : dataframe to which to append the column, default is aGLMRun's data aGLMRun.fit.model.data.frame
-"""
-    fit  = aGLMRun.fit # for convenience
-    data = kwargs.pop('data', fit.model.data.frame)
-    dm   = patsy.dmatrix(fit.model.formula.split('~')[1], data=data, return_type='dataframe') #dm=design matrix
-    # Must be careful to have columns in exog for all the parameters. 
-    # Could use glmfit.params[dm.columns] if missing some.
-    for newcol, offsetcol in pairsNewOffset:
-        print(dt.now(), 'Predicting with offset '+offsetcol)
-        data[newcol] = fit.model.predict(fit.params
-                                      , exog   = dm
-                                      , offset = fit.family.link(data[offsetcol]))
-    print (dt.now(), '... predicted.')
 
 def getKV(k):
     """Get key, value from label, value in the parameters"""
@@ -110,7 +76,8 @@ def getKVs(k):
         return pd.Series({_k: _v for _k, _v in map(getKV, k.split(':'))})
     else:
         return getKV(k)
-    
+
+
 # from https://stackoverflow.com/questions/16705598/python-2-7-statsmodels-formatting-and-writing-summary-output
 def results_summary_to_dataframe(results):
     '''This takes the result of an statsmodel results table and transforms it into a dataframe'''
@@ -130,7 +97,10 @@ def results_summary_to_dataframe(results):
     return results_df
 
 def fitGLM(data, formula, offsetcol):
-    """run the fit, return it, set the offsetcol property of the fit.  Poisson with log link."""
+    """run the fit, set the offsetcol property of the fit.
+    Is only for Poisson with log link.
+    Return the fit object from smf.glm().fit()
+    """
 
     print(dt.now(), 'Fitting ...')
     fit = smf.glm(  data    = data
@@ -143,7 +113,12 @@ def fitGLM(data, formula, offsetcol):
 
 
 def offsetColumnName(fit):
-    """Get the offset column name since the fit doesn't save it.  Assign it to attribute offsetColumnName of fit."""
+    """
+    Get the offset column name since the fit doesn't save it.
+    Take that column to be the one with the least squared error from the offset.
+    Assign it to attribute offsetcol of fit.
+    I acknowledge that this is goofy.
+    """
     data = fit.model.data.frame # data in the model, for convenience
     # The numeric columns
     numericColumns = [_c 
@@ -158,20 +133,23 @@ def offsetColumnName(fit):
     return fit.offsetcol
 
 
-class glmrun(object):
-    """fit             "fit" instance, sved value of glm.fit()
+class GLMRun(object):
+    """fit             "fit" instance, saved value of glm.fit()
     fit.model       is also "glm" above?
     fit.model.data.frame  The source dataframe, so not necessary to keep it separately
     fit.model.formula     The formula
         """
 
-    def __init__(self, *args, **kwargs):
-        """Pass either:
-        1. fit object
-        2. data, formula, offsetcol
+    def __init__(self, **kwargs):
+        """
+        Pass either:
+            fit: a fit object from a statsmodels glm
+        or:
+            data, formula, offsetcol
+
         """
         if 'fit' in kwargs:
-            self.fit = kwargs['fit']
+            self.fit = kwargs.pop['fit']
             # set offset column name if need
             try:
                 ocn = self.fit.offsetcol
@@ -179,10 +157,12 @@ class glmrun(object):
                 offsetColumnName(self.fit) # will set the attribute
         else: # assume has right bits
             self.fit = fitGLM(kwargs['data'], kwargs['formula'], kwargs['offsetcol'])
-        
+
+
     def addPred(self, predname):
-        addPred(self, predname) #addPred function takes this glmrun instance, uses its data and appends column to that.
+        addPred(self, predname) #addPred function takes this GLMRun instance, uses its data and appends column to that.
         return self # so can chain like d3
+
 
     def prettyParams(self):
         """Prettify the parameters: also add 1 where don't have one."""
@@ -195,6 +175,7 @@ class glmrun(object):
                 vals.update({(c, v):0. for v in list(set(data[c].value_counts().keys()).difference(set(s[c].index)))})
         return pd.Series(vals).sort_index()
 
+
     def writeFormula(self, doc):
         """Write the formula to the given document.  Return the document to allow chaining."""
         # FORMULA
@@ -203,65 +184,7 @@ class glmrun(object):
         r.font.name = 'Courier New'
         r.font.size = docx.shared.Pt(8)
         return doc
-        
-    def writeAppendixG(self, doc):
-        """Write appendix g from the report into the docx."""
-        doc.appendix_g_for_report(basis=self.name)
 
-    def writeExhibit(self, doc, **kwargs):
-        """
-        NOTE: I'm not using it.
-        Write an exhibit about a report to the document, number is from doc.n_tab.
-        Arguments:
-            doc: a "mydoc" document object to which to write
-
-        kwargs:
-            show = True: whether to show in the IPython.notebook
-
-        Show:
-        1. Formula
-        2. A/T vs factor (policies)
-        3. Graphs
-
-        A/Model table like exhibit G
-        """
-        show = kwargs.pop('show', True)
-
-        # TITLE
-        doc.add_paragraph('Model {}: Overview'.format(self.name), style='Caption').paragraph_format.keep_with_next = True
-
-        # FORMULA
-        self.writeFormula(doc)
-
-        if show:
-            dis.display(dis.HTML("<pre><span style='font-size:6;'>{}</span></pre>".format(self.fit.model.formula)))
-
-            # Appendix G presentation but with this model
-            self.writeAppendixG(doc)
-
-            # A/T AND MODEL FACTOR COMPARISON: NEEDS WORK FOR BIVARIATE SPLITS 
-            self.compareFactorsAEPlot(doc=doc, show=show) # Makes the picture, saves to doc.
-
-            """
-            doc.add_df(pd.DataFrame({'model factor':self.prettyParams()
-                                        , 'e(factor) = coefficient':np.exp(self.
-                                        ())}).applymap('{:,.4f}'.format)
-                          , caption='Model 0 multipilcative factors')
-            """
-        return doc # so can chain other work
-
-    def writeSummaryTable(self, doc):
-        """Write the summary table of glm in a new landscape section.
-        pass: mydoc object"""    
-
-        doc.landscapeSection() # add a landscape section
-        doc.add_paragraph('Model fit statistics: model {}'.format(self.name), style='Caption').paragraph_format.keep_with_next = True    
-        smry = str(self.fit.summary().tables[1])
-        r = doc.add_paragraph().add_run(smry)
-        r.font.name = 'Courier New'
-        r.font.size = docx.shared.Pt(6)
-        # Display it in the notebook:
-        dis.display(dis.HTML("<pre><span style='font-size:5pt;'>{}</span></pre>".format(smry)))
 
     # Utility function
     def getCoef(self, *args, **kwargs):
@@ -305,54 +228,14 @@ class glmrun(object):
                 coef.append(s.sort_index())
         return coef
     
-    """
 
-    def compareFactorsAE(self, **kwargs):
-        #Compare the factors and the A/E in the data
-        #pp is the parameters (factors).
-        #datsum is the data.
-        pp = self.prettyParams()
-        datsum = self.fit.model.data.frame
-        lvls = [c for c in pp.index.levels[0] if c!='Intercept']
-        
-        # Graphing
-        perRow = 2;  # how many graphs per row
-        nrows = int(np.ceil(len(lvls)*1./perRow)) #leave off the intercept
-        
-        fig, ax = plt.subplots(nrows, int(perRow))
-        fig.set_size_inches(4 * perRow, 3*nrows)
-        fig.tight_layout()
-        act = self.kwargs['formula'].split('~')[0].strip() #'number_of_claims' #Get from the formula.
-        vbt = self.offsetcol # the expected, not generally an offset
-        for _ax, _c in zip(ax.flatten(), lvls): # For each subplot, graph vs that index.
-            tmp = datsum.pivot_table(index=_c, values=[act, vbt], aggfunc=np.sum)
-            tmpdf = pd.DataFrame({
-                ' factor':np.exp(pp[_c])
-                , 'A/E':(tmp[act]/tmp[vbt])
-                } )
-
-            #Reorder for two oddballs
-            if _c=='Duration_Band':
-                tmpdf = tmpdf.loc[['(0, 5]', '(5, 10]', '(10, 15]', '(15, 20]', '(20, 25]']]
-            elif _c=='Face_Amount_Band':
-                tmpdf = tmpdf.loc[faceBands]
-
-            tmpdf.plot(style=['ko-','bo-'], rot=90, ax=_ax, legend=True)
-            # Show all indices if any are string (otherwise they're numeric)
-            if reduce(operator.or_, map(lambda a: isinstance(a, str), tmpdf.index)):
-                _ax.xaxis.set_ticks(np.arange(len(tmpdf.index)))
-                _ax.xaxis.set_ticklabels(tmpdf.index)
-        fig.suptitle="Factors vs Univariate A/{}".format(vbt)
-        fig.tight_layout() # Not sure why did again doesn't seem to hurt
-"""
-    
     def compareFactorsAE(self, *args, **kwargs):
         """Compare factors and A/Model. NOTE: cross-combinations' univariate variables' factors are added in
         to the model factors can be compared to the A/E reflecting all that the model is doing.
-    args: none
-    
-    kwargs:
-        : none.
+        args: none
+
+        kwargs:
+            : none.
         """
         a,e = self.fit.model.formula.split('~')[0].strip(), self.fit.offsetcol # column names for actual and expected
         df  = self.fit.model.data.frame # The data
@@ -371,12 +254,13 @@ class glmrun(object):
             comp.append(tmp)
         return comp    
 
+
     def compareFactorsAEPlot(self, *args, **kwargs):
         """Shows the comparison plots of a/e vs factors for this model.   Written to document if passed, shown in notebook if wanted.
 
-    kwargs:
-        doc: the mydoc document to which to write
-        show_analysis: False
+        kwargs:
+            doc: the mydoc document to which to write
+            show_analysis: False
         """
         comp = self.compareFactorsAE()
         show_analysis = kwargs.pop('show_analysis', False)
@@ -399,27 +283,17 @@ class glmrun(object):
     def showFactorsVsTableBetweenCatgories(self, *args, **kwargs):
         """Plot ratios of combinations of factors, allowing visualization of differences where they're off between actual/table between categories and the factors for those categories.
 
-kwargs:
-    plot=True: if should plot
-    doc: mydoc object if will plot and want to add a figure
-    
-returns:
-    dataframe with index showing pairs for further work
+        kwargs:
+            plot=True: if should plot
+            doc: mydoc object if will plot and want to add a figure
+
+        returns:
+            dataframe with index showing pairs for further work
 
         """
+
         t = self
 
-        # Old version, worked well with no cross combinations
-        """c = pd.concat(t.compareFactorsAE(), axis=0, keys = [_df.index.name for _df in t.compareFactorsAE()])
-        d = {(c.iloc[a].name[0],c.iloc[b].name[0],c.iloc[a].name[1],c.iloc[b].name[1]): 
-                 (c.iloc[a]/c.iloc[b]) # the ratio: of both a/t and factor at row a over those at row b
-                for a,b in itertools.combinations(range(len(c)), 2)
-                if c.iloc[a].name[0]==c.iloc[b].name[0] # only  compare within the same variables
-            }
-        res = pd.DataFrame(d).T
-        res.index.names = ['num_k','den_k', 'num_v', 'den_v']
-
-        """
         res = {( str(c.index.to_native_types()[a])
                 ,str(c.index.to_native_types()[b])):(c.iloc[a]/c.iloc[b])
                  for c in t.compareFactorsAE()
@@ -503,8 +377,7 @@ returns:
                             #add column for factors for thing we're splitting by
                          , res], axis=1).T #append factors for thing we're splitting by and return.
     
-    
-    
+
     def factorAnalysisExhibit(self, forEach):
         """Show across categories in forEach: 
         
