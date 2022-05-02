@@ -6,7 +6,7 @@ from datetime import datetime as dt
 #http://statsmodels.sourceforge.net/devel/gettingstarted.html
 import statsmodels.api as sm, statsmodels.formula.api as smf, patsy
 from patsy import dmatrices
-
+from functools import reduce
 
 #I need the correct face band ordering.
 faceBands = [
@@ -297,11 +297,11 @@ class GLMRun(object):
         res = {( str(c.index.to_native_types()[a])
                 ,str(c.index.to_native_types()[b])):(c.iloc[a]/c.iloc[b])
                  for c in t.compareFactorsAE()
-                 for a,b in itertools.combinations(range(len(c)),2)
-                                      } # all combinations between rows
+                 for a, b in itertools.combinations(range(len(c)),2)
+                } # all combinations between rows
         res =  pd.DataFrame(res).T
-        res.index.names = ['numerator','deonominator']
-        
+        res.index.names = ['numerator', 'deonominator']
+
         plot = kwargs.get('plot', True)
         if plot or kwargs.has_key('doc'):
             # Plot the pairs
@@ -475,4 +475,149 @@ def compareAE(data, index, columns, *args, **kwargs):
                _ax.legend(bbox_to_anchor=(1,1), loc='upper left')
         plt.tight_layout() # need this too?
     return res
+
+
+"""
+This file is to be run separately from glmtools.
+The models are saved as glmrun objects already, and these additional functions
+are added onto the glmrun class.
+
+"""
+
+import networkx as nx
+
+
+#################################################################################################################
+###  FROM HERE DOWN: The revised functions to plot correctly when have cross-combinations.
+###  Note: All factors that share variables must be combined into a tensor of factors for comparison to A/E.
+###  That means that all variables that are connected must be grouped together - and the degree must be <= 2 for it
+###  to be shown here.
+#################################################################################################################
+
+
+def getCoef(self):
+    """Get list of series of factors, index is values for given variable.
+    Read from the glm output.
+    The intercept is not returned."""
+
+    # Get the components from the two sources.
+    fitres = results_summary_to_dataframe(self.fit)['coeff'] # all results from the fit: coefficients only, so: a series
+
+    # Get tuples in each row of exogenous variables, will be handy later: WILL CHOKE if one name is within another name!
+    exog = set([tuple([c for c in sorted(self.fit.model.data.frame.columns) if c in en])
+                for en
+                in self.fit.model.exog_names])
+    exog = {deg:[f for f in exog if len(f)==deg]
+            for deg in set([len(f) for f in exog]) if deg>0} #again, skip constant, deg=0
+
+    # For each exogenous variable name set, get the coefficients as a series.
+    coef = [] # will be list of series with index = the things by which splitting
+    for deg in exog.keys():
+        for names in exog[deg]:  #Get the fit results coefficients for just this variable
+            # Get the coefficients for just this name and not for any others
+            x = fitres[[i for i in fitres.index if (i.count(':') +1 == len(names)) and all([c in i for c in names])]].copy()
+            # Change the index column names
+            # Append to the coefficients
+            #names = [getKV(k)[0] for k in x.keys()[0].split(':')]
+
+            # trying a bunch of things that arent' working
+            x = ({tuple([getKV(j)[1] for j in i.split(':')]):y
+                 for i, y in x.to_dict().items()})
+            ks,vs = [], [] # to keep them ordered the same
+            for k,v in x.items():
+                ks.append(k)
+                vs.append(v)
+            # Make the series
+            s = pd.Series(vs, pd.MultiIndex.from_tuples(ks, names=names), name='coef')
+            s.index.names= names
+            coef.append(s)
+    return coef
+
+def getSubgraphs(coefs):
+    """Retrun groups of the variable sets of factors which share no indices between groups.  Pass output of getCoef."""
+    g = nx.Graph()
+    for c0, c1 in itertools.product(coefs, coefs):
+        # Add the edge if they intersect, including edges to themselves so they'll show up as neighbors.
+        if len(set(c0.index.names).intersection(set(c1.index.names))):
+            g.add_edge(tuple(c0.index.names), tuple(c1.index.names))  # each will be added twice, so what
+    sgs = []  # the subgraphs
+    ns_left = set(g.nodes())
+    while len(ns_left):  # while some nodes are unassigned to a graph:
+        # Assign the first one to a new subgraph.
+        sgs.append(list(g.neighbors(ns_left.pop())))
+        ns_left = ns_left.difference(sgs[-1])  # Take that subgraph's nodes out from the remaining nodes.
+    return sgs
+
+
+def compareFactorsAE(self):
+    """Compare factors and A/Model. NOTE: cross-combinations' univariate variables' factors are added in
+    to the model factors can be compared to the A/E reflecting all that the model is doing.
+    args: none
+
+    kwargs:
+        : none.
+    """
+    a, e = self.fit.model.formula.split('~')[0].strip(), self.fit.offsetcol # column names for actual and expected
+    df  = self.fit.model.data.frame # The data
+    coefOrig = self.getCoef() # Coefficients as expressed by the results.
+
+    # comp is a list of dataframes: index is categories, maybe multiindex; columns are a/table and factor.
+    comp = []
+    for sg in getSubgraphs(coefOrig): # must group the coefficients into groups that will be added together
+        indexnames = list(reduce(set.union, map(set, sg))) # list if the names of fields in the index
+        ae = df.pivot_table(index = indexnames, values = [a,e], aggfunc=np.sum)
+        # make a multiindex if not
+        if ae.index.ndim==1:
+            ae.index = pd.MultiIndex.from_tuples([(i,) for i in ae.index], names=[ae.index.name])
+        ae = ae[a] / ae[e]
+        # Now: append the factors.
+        # Add 0 in shape of ae first to get the full index so adding series will work.
+        coefsum = addCoefs( [ae*0] + [c for c in coefOrig if tuple(c.index.names) in sg] )
+        tmp= pd.DataFrame({'Factor':np.exp(coefsum),'A/Table':ae})#.sort_index()
+        tmp.index.names = coefsum.index.names # they'll be the same.  For text categories the names didn't stay.
+        comp.append(tmp)
+    return comp
+
+
+def addCoefs(coefs):
+    """Add the two sets of coeffs. Their like-named multiindex columns will be matched.
+    They are not exponentiated here.
+    I need to start with a series with all the possibilities.
+    NOTE: will miss adding default categories in some cases, always send 1st element in list with
+    series of zeros with full index to be populated.
+    This full index could be obtained by using the field names from a pivot tabel of the source data."""
+    res = coefs[0];
+    for _c in coefs[1:]:
+        res = res.add(_c, fill_value=0)
+    return res
+
+
+
+
+def compPlot(c):
+    """Plot a dataframe of Factor and A/Table. If factors are univariate then is simple; if bivarate
+    then plot 4 graphs.
+
+    Utility function, which can be used alone.
+    """
+    deg = len(c.index.names)  # degree of the plots
+
+    plotoptions = dict(rot=45, ylim=(0.5, 2))
+    if 1 == deg:
+        c.plot(style=['k.-', 'b.-'], **plotoptions)
+    elif 2 == deg:
+        # Plot 4: factor, beside a/e, with one x, then the other.
+        tmp = c.reset_index().pivot_table(index=c.index.names[0], columns=c.index.names[1], values=c.columns)
+        # ... aggfunc irrelevant, is exactly one value, so mean, min, sum, max, ... all same
+        fig, ax = plt.subplots(2, 2)
+        fig.set_size_inches(8, 6)
+        fig.tight_layout()
+        for _ax, _y, _leg in zip(ax[0], c.columns, [False, True]):  # Factor or A/E
+            tmp[_y].plot(title=_y, ax=_ax, legend=_leg, **plotoptions)
+        for _ax, _y, _leg in zip(ax[1], c.columns,
+                                 [False, True]):  # Factor or A/E # Transposed other way
+            tmp[_y].T.plot(title=_y, ax=_ax, legend=_leg, **plotoptions)
+        ax[0, 1].legend(loc='upper left', bbox_to_anchor=(1, 1))
+        ax[1, 1].legend(loc='upper left', bbox_to_anchor=(1, 1))
+        plt.tight_layout()
 
