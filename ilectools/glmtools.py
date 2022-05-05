@@ -6,17 +6,9 @@ from datetime import datetime as dt
 #http://statsmodels.sourceforge.net/devel/gettingstarted.html
 import statsmodels.api as sm, statsmodels.formula.api as smf, patsy
 from patsy import dmatrices
+import networkx as nx
+
 from functools import reduce
-
-#I need the correct face band ordering.
-faceBands = [
-    ' <100000',
-    ' 100000-249999',
-    ' 250000-499999',
-    ' 500000-999999',
-    '1000000-2499999',
-    '2500000+']
-
 
 def getSummary(data, indexColumns, *args, **kwargs):
     """Make a pivot table of data by columns using the known value columns by policy as values;
@@ -81,6 +73,7 @@ def getKVs(k):
 # from https://stackoverflow.com/questions/16705598/python-2-7-statsmodels-formatting-and-writing-summary-output
 def results_summary_to_dataframe(results):
     '''This takes the result of an statsmodel results table and transforms it into a dataframe'''
+    # could just use results.fit.summary2().tables[1]
     pvals = results.pvalues
     coeff = results.params
     conf_lower = results.conf_int()[0]
@@ -112,7 +105,7 @@ def fitGLM(data, formula, offsetcol):
     return fit
 
 
-def offsetColumnName(fit):
+def offset_column_name(fit):
     """
     Get the offset column name since the fit doesn't save it.
     Take that column to be the one with the least squared error from the offset.
@@ -154,7 +147,7 @@ class GLMRun(object):
             try:
                 ocn = self.fit.offsetcol
             except:
-                offsetColumnName(self.fit) # will set the attribute
+                offset_column_name(self.fit) # will set the attribute
         else: # assume has right bits
             self.fit = fitGLM(kwargs['data'], kwargs['formula'], kwargs['offsetcol'])
 
@@ -176,60 +169,48 @@ class GLMRun(object):
         return pd.Series(vals).sort_index()
 
 
-    def writeFormula(self, doc):
-        """Write the formula to the given document.  Return the document to allow chaining."""
-        # FORMULA
-        doc.add_paragraph("Formula for model {}, using offset column {}:".format(self.name, self.fit.offsetcol))
-        r = doc.add_paragraph().add_run(self.fit.model.formula)
-        r.font.name = 'Courier New'
-        r.font.size = docx.shared.Pt(8)
-        return doc
-
-
     # Utility function
-    def getCoef(self, *args, **kwargs):
+    def getCoef(self):
         """Get list of series of factors, index is values for given variable.
         Read from the glm output.
         The intercept is not returned."""
 
         # Get the components from the two sources.
-        fitres = results_summary_to_dataframe(self.fit)['coeff'] # all results from the fit: coefficients only, so: a series
+        fitres = results_summary_to_dataframe(self.fit)[
+            'coeff']  # all results from the fit: coefficients only, so: a series
 
         # Get tuples in each row of exogenous variables, will be handy later: WILL CHOKE if one name is within another name!
-        exog = set([tuple([c for c in sorted(self.fit.model.data.frame.columns) if c in en]) 
-                    for en 
+        exog = set([tuple([c for c in sorted(self.fit.model.data.frame.columns) if c in en])
+                    for en
                     in self.fit.model.exog_names])
-        exog = {deg:[f for f in exog if len(f)==deg]
-                for deg in set([len(f) for f in exog]) if deg>0} #again, skip constant, deg=0
+        exog = {deg: [f for f in exog if len(f) == deg]
+                for deg in set([len(f) for f in exog]) if deg > 0}  # again, skip constant, deg=0
 
         # For each exogenous variable name set, get the coefficients as a series.
-        coef = [] # will be list of series with index = the things by which splitting
+        coef = []  # will be list of series with index = the things by which splitting
         for deg in exog.keys():
-            for names in exog[deg]:  #Get the fit results coefficients for just this variable
+            for names in exog[deg]:  # Get the fit results coefficients for just this variable
                 # Get the coefficients for just this name and not for any others
-                x = fitres[[i for i in fitres.index if (i.count(':') +1 == len(names)) and all([c in i for c in names])]].copy()
+                x = fitres[[i for i in fitres.index if
+                            (i.count(':') + 1 == len(names)) and all([c in i for c in names])]].copy()
                 # Change the index column names
                 # Append to the coefficients
-                #names = [getKV(k)[0] for k in x.keys()[0].split(':')]
+                # names = [getKV(k)[0] for k in x.keys()[0].split(':')]
 
                 # trying a bunch of things that arent' working
-                x = ({tuple([getKV(j)[1] for j in i.split(':')]):y
-                     for i, y in x.to_dict().items()})
-                ks,vs = [], [] # to keep them ordered the same
-                for k,v in x.items():
+                x = ({tuple([getKV(j)[1] for j in i.split(':')]): y
+                      for i, y in x.to_dict().items()})
+                ks, vs = [], []  # to keep them ordered the same
+                for k, v in x.items():
                     ks.append(k)
                     vs.append(v)
                 # Make the series
-                s = pd.Series(vs, pd.MultiIndex.from_tuples(ks), name='coef')
-                if len(names)>1:
-                    s.index.names = names
-                else:
-                    s.index.name = names[0]            
-                coef.append(s.sort_index())
+                s = pd.Series(vs, pd.MultiIndex.from_tuples(ks, names=names), name='coef')
+                s.index.names = names
+                coef.append(s)
         return coef
-    
 
-    def compareFactorsAE(self, *args, **kwargs):
+    def compareFactorsAE(self):
         """Compare factors and A/Model. NOTE: cross-combinations' univariate variables' factors are added in
         to the model factors can be compared to the A/E reflecting all that the model is doing.
         args: none
@@ -237,36 +218,38 @@ class GLMRun(object):
         kwargs:
             : none.
         """
-        a,e = self.fit.model.formula.split('~')[0].strip(), self.fit.offsetcol # column names for actual and expected
-        df  = self.fit.model.data.frame # The data
-        coefOrig = self.getCoef() # Coefficients as expressed by the results.
+        a, e = self.fit.model.formula.split('~')[0].strip(), self.fit.offsetcol  # column names for actual and expected
+        df = self.fit.model.data.frame  # The data
+        coefOrig = self.getCoef()  # Coefficients as expressed by the results.
 
         # comp is a list of dataframes: index is categories, maybe multiindex; columns are a/table and factor.
         comp = []
-        for sg in getSubgraphs(coefOrig): # must group the coefficients into groups that will be added together
-            indexnames = list(reduce(set.union, map(set, sg))) # list if the names of fields in the index
-            ae = df.pivot_table(index = indexnames, values = [a,e], aggfunc=np.sum)
+        for sg in getSubgraphs(coefOrig):  # must group the coefficients into groups that will be added together
+            indexnames = list(reduce(set.union, map(set, sg)))  # list if the names of fields in the index
+            ae = df.pivot_table(index=indexnames, values=[a, e], aggfunc=np.sum)
+            # make a multiindex if not
+            if ae.index.ndim == 1:
+                ae.index = pd.MultiIndex.from_tuples([(i,) for i in ae.index], names=[ae.index.name])
             ae = ae[a] / ae[e]
-            # Now: append the factors.  Add 0 in shape of ae first to get the full index so adding series will work.
-            coefsum = addCoefs( [ae*0] + [c for c in coefOrig if c.index.names in sg] )
-            tmp= pd.DataFrame({'Factor':np.exp(coefsum),'A/Table':ae}).sort_index()
-            tmp.index.names = coefsum.index.names # they'll be the same.  For text categories the names didn't stay.
+            # Now: append the factors.
+            # Add 0 in shape of ae first to get the full index so adding series will work.
+            coefsum = addCoefs([ae * 0] + [c for c in coefOrig if tuple(c.index.names) in sg])
+            tmp = pd.DataFrame({'Factor': np.exp(coefsum), 'A/Table': ae})  # .sort_index()
+            tmp.index.names = coefsum.index.names  # they'll be the same.  For text categories the names didn't stay.
             comp.append(tmp)
-        return comp    
+        return comp
 
 
-    def compareFactorsAEPlot(self, *args, **kwargs):
+    def compareFactorsAEPlot(self, doc=None, show_analysis=False):
         """Shows the comparison plots of a/e vs factors for this model.   Written to document if passed, shown in notebook if wanted.
 
-        kwargs:
-            doc: the mydoc document to which to write
-            show_analysis: False
+        args:
+            doc=None: the mydoc document to which to write
+            show_analysis=False: whether to write the factor analysis exhibit to the doc
         """
         comp = self.compareFactorsAE()
-        show_analysis = kwargs.pop('show_analysis', False)
 
-        if kwargs.has_key('doc'):
-            doc = kwargs.pop('doc')
+        if not doc is None:
             for c in comp:
                 # Save to doc
                 compPlot(c)
@@ -390,7 +373,7 @@ class GLMRun(object):
            forEach: should be a category in the model
            
        ... Compare factors for a split with the average factor in the applicable other categories and a/table"""
-        cf = {_df.index.name:_df for _df in self.compareFactorsAE()}[forEach].T
+        cf = {_df.index.names:_df for _df in self.compareFactorsAE()}[forEach].T
         cfa = self.compFactorAvg(forEach) # the average factor: must exclude category forEach from this becasue is shown
                  # as factor already
         # Show intercept (overall factor) and take out the one that we're splitting by since we show it already
@@ -495,43 +478,6 @@ import networkx as nx
 #################################################################################################################
 
 
-def getCoef(self):
-    """Get list of series of factors, index is values for given variable.
-    Read from the glm output.
-    The intercept is not returned."""
-
-    # Get the components from the two sources.
-    fitres = results_summary_to_dataframe(self.fit)['coeff'] # all results from the fit: coefficients only, so: a series
-
-    # Get tuples in each row of exogenous variables, will be handy later: WILL CHOKE if one name is within another name!
-    exog = set([tuple([c for c in sorted(self.fit.model.data.frame.columns) if c in en])
-                for en
-                in self.fit.model.exog_names])
-    exog = {deg:[f for f in exog if len(f)==deg]
-            for deg in set([len(f) for f in exog]) if deg>0} #again, skip constant, deg=0
-
-    # For each exogenous variable name set, get the coefficients as a series.
-    coef = [] # will be list of series with index = the things by which splitting
-    for deg in exog.keys():
-        for names in exog[deg]:  #Get the fit results coefficients for just this variable
-            # Get the coefficients for just this name and not for any others
-            x = fitres[[i for i in fitres.index if (i.count(':') +1 == len(names)) and all([c in i for c in names])]].copy()
-            # Change the index column names
-            # Append to the coefficients
-            #names = [getKV(k)[0] for k in x.keys()[0].split(':')]
-
-            # trying a bunch of things that arent' working
-            x = ({tuple([getKV(j)[1] for j in i.split(':')]):y
-                 for i, y in x.to_dict().items()})
-            ks,vs = [], [] # to keep them ordered the same
-            for k,v in x.items():
-                ks.append(k)
-                vs.append(v)
-            # Make the series
-            s = pd.Series(vs, pd.MultiIndex.from_tuples(ks, names=names), name='coef')
-            s.index.names= names
-            coef.append(s)
-    return coef
 
 def getSubgraphs(coefs):
     """Retrun groups of the variable sets of factors which share no indices between groups.  Pass output of getCoef."""
@@ -549,36 +495,6 @@ def getSubgraphs(coefs):
     return sgs
 
 
-def compareFactorsAE(self):
-    """Compare factors and A/Model. NOTE: cross-combinations' univariate variables' factors are added in
-    to the model factors can be compared to the A/E reflecting all that the model is doing.
-    args: none
-
-    kwargs:
-        : none.
-    """
-    a, e = self.fit.model.formula.split('~')[0].strip(), self.fit.offsetcol # column names for actual and expected
-    df  = self.fit.model.data.frame # The data
-    coefOrig = self.getCoef() # Coefficients as expressed by the results.
-
-    # comp is a list of dataframes: index is categories, maybe multiindex; columns are a/table and factor.
-    comp = []
-    for sg in getSubgraphs(coefOrig): # must group the coefficients into groups that will be added together
-        indexnames = list(reduce(set.union, map(set, sg))) # list if the names of fields in the index
-        ae = df.pivot_table(index = indexnames, values = [a,e], aggfunc=np.sum)
-        # make a multiindex if not
-        if ae.index.ndim==1:
-            ae.index = pd.MultiIndex.from_tuples([(i,) for i in ae.index], names=[ae.index.name])
-        ae = ae[a] / ae[e]
-        # Now: append the factors.
-        # Add 0 in shape of ae first to get the full index so adding series will work.
-        coefsum = addCoefs( [ae*0] + [c for c in coefOrig if tuple(c.index.names) in sg] )
-        tmp= pd.DataFrame({'Factor':np.exp(coefsum),'A/Table':ae})#.sort_index()
-        tmp.index.names = coefsum.index.names # they'll be the same.  For text categories the names didn't stay.
-        comp.append(tmp)
-    return comp
-
-
 def addCoefs(coefs):
     """Add the two sets of coeffs. Their like-named multiindex columns will be matched.
     They are not exponentiated here.
@@ -590,8 +506,6 @@ def addCoefs(coefs):
     for _c in coefs[1:]:
         res = res.add(_c, fill_value=0)
     return res
-
-
 
 
 def compPlot(c):
