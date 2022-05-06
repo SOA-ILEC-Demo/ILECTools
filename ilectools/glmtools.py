@@ -1,7 +1,7 @@
 import IPython.display as dis
 
 import re, numpy as np, pandas as pd, matplotlib.pyplot as plt, itertools, operator
-import matplotlib as mpl
+import matplotlib as mpl, matplotlib.pyplot as plt
 from datetime import datetime as dt
 #http://statsmodels.sourceforge.net/devel/gettingstarted.html
 import statsmodels.api as sm, statsmodels.formula.api as smf, patsy
@@ -10,34 +10,76 @@ import networkx as nx
 
 from functools import reduce
 
-def getSummary(data, indexColumns, *args, **kwargs):
-    """Make a pivot table of data by columns using the known value columns by policy as values;
-    resetting index and removing bogus zero or null values.
 
-    Working with the nonaggregated data is too slow, this function aggregates the dataframe with a pivot
-    and then resets the index.
-    It only keeps data by count.
+def add_cols(df):
+    '''Add certain columns to the dataframe for modeling and return it.
+    These additional columns are categorical groupings of fields:
+    ltp: level term period grouping 20 year and not term, to 20 year will be a baseline term rate
+    dur_band1
+    ia_band1
+    iy_band1
+    '''
 
-    Arguments:
+    # I don't like 'Not Level Term' and "N/A (Not Term)" both being in there, should probably have consolidated them
+    # level term period for this purpose
+    df['ltp'] = (df.soa_anticipated_level_term_period.replace(
+        {'20 yr anticipated': '20 yr or N/A (Not Term)',
+         'N/A (Not Term)': '20 yr or N/A (Not Term)'}
+    ).str.replace(' anticipated', '')
+                 )
 
-data    : the data to list: offset must be valid values, e.g. nononzero for log link
-indexColumns: the index columns of the pivot
+    # duration bands in the original paper
+    if not 'dur_band1' in df and 'duration' in df:
+        df['dur_band1'] = 'n/a'  # a default, which will get overridden
+        for band, durs in {
+            '01': [1],
+            '02': [2],
+            '03': [3],
+            '04-05': [4, 5],
+            '06-10': range(6, 11),
+            '11-15': range(11, 16),
+            '16-20': range(16, 21),
+            '21-25': range(21, 26)}.items():
+            df.loc[df.duration.isin(durs), 'dur_band1'] = band
+        df.loc[df.duration > 25, 'dur_band1'] = '26-150'
 
-optional:
-values: the values to be added
+    if not 'ia_band1' in df and 'issue_age' in df:
+        df['ia_band1'] = '18-24'
+        for a in range(25, 95, 5):
+            df.loc[df.issue_age.between(a, a + 4), 'ia_band1'] = f'{a}-{a + 4}'
+        df.loc[df.issue_age > 94, 'ia_band1'] = '95+'
+        if df.issue_age.min() < 18:
+            df.loc[df.issue_age < 18, 'ia_band1'] = '00-18'
 
-"""
-    values = kwargs.pop('values', ['number_of_claims', 'policies_exposed'] +
-                        map('expected_claim_qx{}vbt_by_policy'.format, [2008, 2015]))
-    res = data.pivot_table(index = indexColumns
-        , values=values
-        , aggfunc=np.sum
-        , dropna=True)
-    res = res.reset_index()
-    return res
+    if not 'iy_band1' in df and 'issue_year' in df:
+        df['iy_band1'] = '1900-1989'
+        df.loc[df.issue_year.between(1990, 1999), 'iy_band1'] = '1990-1999'
+        df.loc[df.issue_year.between(2000, 2009), 'iy_band1'] = '2000-2009'
+        df.loc[df.issue_year >= 2010, 'iy_band1'] = '2010-'
 
-######################################################################################################################
+    return df
 
+
+def exhibit_g_subset(data, max_observation_year=2013):
+    '''
+    Return the subset used for Exhibit G:
+    * post level term indicator not 'Post Level term'
+    * select period i.e. durations 1-25
+    * adult issue ages, > 17
+    * observation year <= max_observation_year, 2013 by default for consistency with report
+
+    Also return only those records with exposure.  There is a trivial amount claim, no count, in a record
+    with no exposure.
+    '''
+
+    # subset of data for exhibit g, the example used in
+    return data[(data.soa_post_level_term_indicator != 'Post Level Term')
+              & (data.duration < 26)  # select only
+              & (data.observation_year <= max_observation_year)  # for consistency with the report, update if you like
+              & (data.issue_age > 17)  # no juvies pls
+              & (data.amount_exposure > 0) # why there anyway... and would crash lm factor regression
+              & (data.policy_exposure > 0) # ditto
+            ]
 
 def getKV(k):
     """Get key, value from label, value in the parameters"""
@@ -70,299 +112,193 @@ def getKVs(k):
         return getKV(k)
 
 
-# from https://stackoverflow.com/questions/16705598/python-2-7-statsmodels-formatting-and-writing-summary-output
-def results_summary_to_dataframe(results):
-    '''This takes the result of an statsmodel results table and transforms it into a dataframe'''
-    # could just use results.fit.summary2().tables[1]
-    pvals = results.pvalues
-    coeff = results.params
-    conf_lower = results.conf_int()[0]
-    conf_higher = results.conf_int()[1]
+class PoissonWrapper(object):
+    """
+    This class adds a few presentation functions to the statsmodels tools.
 
-    results_df = pd.DataFrame({"pvals":pvals,
-                               "coeff":coeff,
-                               "conf_lower":conf_lower,
-                               "conf_higher":conf_higher
-                                })
+    Attributes:
+        offset_column: the name of the column being adjusted
+        univariate_factors: whether the formula contains only univariate factors, i.e. no cross combinations.
+            The presentation tools to not allow cross combinations as they were not needed for the 2018 report.
+        fit: the results of statsmodels.formula.api.poisson fit
+        ... and its properties below it
+        fit.model
+        fit.model.data.frame  The source dataframe, so not necessary to keep it separately, it's saved here
+        fit.model.formula     The formula
+            ... etc ... all the attributes of the fit, as that result is just svaed here
 
-    #Reordering...
-    results_df = results_df[["coeff","pvals","conf_lower","conf_higher"]]
-    return results_df
+    functions:
 
-def fitGLM(data, formula, offsetcol):
-    """run the fit, set the offsetcol property of the fit.
-    Is only for Poisson with log link.
-    Return the fit object from smf.glm().fit()
     """
 
-    print(dt.now(), 'Fitting ...')
-    fit = smf.glm(  data    = data
-                  , formula = formula
-                  , offset  = np.log(data[offsetcol])
-                  , family  = sm.families.Poisson(link=sm.families.links.log())).fit()
-    print(dt.now(), '... fit.')
-    fit.offsetcol = offsetcol # to keep the name
-    return fit
-
-
-def offset_column_name(fit):
-    """
-    Get the offset column name since the fit doesn't save it.
-    Take that column to be the one with the least squared error from the offset.
-    Assign it to attribute offsetcol of fit.
-    I acknowledge that this is goofy.
-    """
-    data = fit.model.data.frame # data in the model, for convenience
-    # The numeric columns
-    numericColumns = [_c 
-                     for _c in data.columns
-                     if 'int' in str(data[_c].dtype)
-                          or 'float' in str(data[_c].dtype)]
-    # Check the numeric columns to see whether they match the offset
-    invoffset = fit.model.family.link.inverse(fit.model.offset) # will match an original column
-    # Pick the column with the least root squared error from the offset column
-    rse = pd.Series({_c: np.linalg.norm(data[_c]-invoffset) for _c in numericColumns})
-    setattr(fit, 'offsetcol', rse[rse==rse.min()].index[0])
-    return fit.offsetcol
-
-
-class GLMRun(object):
-    """fit             "fit" instance, saved value of glm.fit()
-    fit.model       is also "glm" above?
-    fit.model.data.frame  The source dataframe, so not necessary to keep it separately
-    fit.model.formula     The formula
-        """
-
-    def __init__(self, **kwargs):
-        """
-        Pass either:
+    def __init__(self, formula, data, offset_column):
+        """pass:ass either:
             fit: a fit object from a statsmodels glm
         or:
             data, formula, offsetcol
 
+        formula: the patsy formula for the model
+        data: the dataframe
+        offset_column: the column adjusted multiplicatively by factor for fit
         """
-        if 'fit' in kwargs:
-            self.fit = kwargs.pop['fit']
-            # set offset column name if need
-            try:
-                ocn = self.fit.offsetcol
-            except:
-                offset_column_name(self.fit) # will set the attribute
-        else: # assume has right bits
-            self.fit = fitGLM(kwargs['data'], kwargs['formula'], kwargs['offsetcol'])
+        # You could just use smf.glm here but also specify family parameter
+
+        self.univariate_factors = not (':' in formula or '*' in formula)
+        try:
+            assert self.univariate_factors
+        except AssertionError:
+            print('No cross combinations for these presentation tools please, your formula contains * or :.'
+                  '  The model will be run but the presentation tools will not work.\n')
+
+        self.fit = smf.poisson(data=data,
+                      formula=formula,
+                      offset=np.log(data[offset_column]),
+                      #family=sm.families.Poisson(link=sm.families.links.log())
+                      ).fit()
+
+        self.offset_column = offset_column  # to keep the name
 
 
-    def addPred(self, predname):
-        addPred(self, predname) #addPred function takes this GLMRun instance, uses its data and appends column to that.
-        return self # so can chain like d3
-
-
-    def prettyParams(self):
+    def pretty_params(self):
         """Prettify the parameters: also add 1 where don't have one."""
-        vals = {getKV(_k):_v for _k,_v in self.fit.params.to_dict().items()}
+        vals = {getKV(_k):_v
+                for _k,_v
+                in self.fit.params.to_dict().items()
+                }
         s = pd.Series(vals)
         data = self.fit.model.data.frame # for convenience
-        #for each column, get any missing values - such as defaults, set their factor to 1 (not for Intercept - there's no corresponding column)
+        # For each column, get any missing values - such as defaults, set their factor to 1
+        # (not for Intercept - there's no corresponding column)
         for c in s.index.levels[0]:
             if c!='Intercept':
-                vals.update({(c, v):0. for v in list(set(data[c].value_counts().keys()).difference(set(s[c].index)))})
+                vals.update({(c, v):0. # append to dictionary a factor of 0 for each default category, i.e. not lised
+                             for v
+                             in list(set(data[c]) # all values of category c
+                                     .difference(set(s[c].index)) # ... removing those for which have factor
+                                     )
+                             })
         return pd.Series(vals).sort_index()
 
 
-    # Utility function
-    def getCoef(self):
-        """Get list of series of factors, index is values for given variable.
-        Read from the glm output.
-        The intercept is not returned."""
-
-        # Get the components from the two sources.
-        fitres = results_summary_to_dataframe(self.fit)[
-            'coeff']  # all results from the fit: coefficients only, so: a series
-
-        # Get tuples in each row of exogenous variables, will be handy later: WILL CHOKE if one name is within another name!
-        exog = set([tuple([c for c in sorted(self.fit.model.data.frame.columns) if c in en])
-                    for en
-                    in self.fit.model.exog_names])
-        exog = {deg: [f for f in exog if len(f) == deg]
-                for deg in set([len(f) for f in exog]) if deg > 0}  # again, skip constant, deg=0
-
-        # For each exogenous variable name set, get the coefficients as a series.
-        coef = []  # will be list of series with index = the things by which splitting
-        for deg in exog.keys():
-            for names in exog[deg]:  # Get the fit results coefficients for just this variable
-                # Get the coefficients for just this name and not for any others
-                x = fitres[[i for i in fitres.index if
-                            (i.count(':') + 1 == len(names)) and all([c in i for c in names])]].copy()
-                # Change the index column names
-                # Append to the coefficients
-                # names = [getKV(k)[0] for k in x.keys()[0].split(':')]
-
-                # trying a bunch of things that arent' working
-                x = ({tuple([getKV(j)[1] for j in i.split(':')]): y
-                      for i, y in x.to_dict().items()})
-                ks, vs = [], []  # to keep them ordered the same
-                for k, v in x.items():
-                    ks.append(k)
-                    vs.append(v)
-                # Make the series
-                s = pd.Series(vs, pd.MultiIndex.from_tuples(ks, names=names), name='coef')
-                s.index.names = names
-                coef.append(s)
-        return coef
-
-    def compareFactorsAE(self):
-        """Compare factors and A/Model. NOTE: cross-combinations' univariate variables' factors are added in
-        to the model factors can be compared to the A/E reflecting all that the model is doing.
-        args: none
-
-        kwargs:
-            : none.
+    def compare_factors_with_a_to_t(self):
+        """Compare factors and A/Model in aggregate for the set.
+        NOTE: the factors are all of the model factors that interrelate.  For example, if there
+            are factors for combinations of face band and underwriting class, but also for
+            combinations of underwriting class and sex, then all three are compared together.
         """
-        a, e = self.fit.model.formula.split('~')[0].strip(), self.fit.offsetcol  # column names for actual and expected
-        df = self.fit.model.data.frame  # The data
-        coefOrig = self.getCoef()  # Coefficients as expressed by the results.
+        # column names for actual and tabluar
 
-        # comp is a list of dataframes: index is categories, maybe multiindex; columns are a/table and factor.
-        comp = []
-        for sg in getSubgraphs(coefOrig):  # must group the coefficients into groups that will be added together
-            indexnames = list(reduce(set.union, map(set, sg)))  # list if the names of fields in the index
-            ae = df.pivot_table(index=indexnames, values=[a, e], aggfunc=np.sum)
-            # make a multiindex if not
-            if ae.index.ndim == 1:
-                ae.index = pd.MultiIndex.from_tuples([(i,) for i in ae.index], names=[ae.index.name])
-            ae = ae[a] / ae[e]
-            # Now: append the factors.
-            # Add 0 in shape of ae first to get the full index so adding series will work.
-            coefsum = addCoefs([ae * 0] + [c for c in coefOrig if tuple(c.index.names) in sg])
-            tmp = pd.DataFrame({'Factor': np.exp(coefsum), 'A/Table': ae})  # .sort_index()
-            tmp.index.names = coefsum.index.names  # they'll be the same.  For text categories the names didn't stay.
-            comp.append(tmp)
-        return comp
+        if not self.univariate_factors:
+            return
+
+        # The coefficients
+        coef = np.exp(self.pretty_params())
+        coef = coef.loc[~coef.index.isin([('Intercept', 'Intercept')])]
 
 
-    def compareFactorsAEPlot(self, doc=None, show_analysis=False):
-        """Shows the comparison plots of a/e vs factors for this model.   Written to document if passed, shown in notebook if wanted.
+        a, t = self.fit.model.formula.split('~')[0].strip(), self.offset_column # actual, tabular columns in data
+        data = self.fit.model.data.frame  # The data, for convenience
 
+        # variables for which have categorical factors and will compare to a/tab ratio, makes sure no Intercept
+        vars = list(set(coef.index.to_frame()[0]))
+        a_t = pd.concat([data.pivot_table(index=i, values=[a,t], aggfunc=np.sum)
+                         for i in vars],
+                        keys=vars)
+        a_t = a_t[a] / a_t[t] # the ratio is all we want here
+
+        return pd.DataFrame({'Factor':coef, 'A/Table':a_t}).sort_index()
+
+    def plot_comparision(self):
+        '''Return dictionary of plots of a/table and factor'''
+
+        plots = {}
+        plotoptions = dict(rot=45, ylim=(0.5, 2), grid=True)
+        a_t = self.compare_factors_with_a_to_t()
+        vars = list(set(a_t.index.to_frame()[0])) # get variables to show
+
+        for i in vars:
+            ax = a_t.loc[i].plot(style=['r.-', 'b.-'], **plotoptions)
+            plt.axhline(1, color='k')
+            ax.yaxis.set_major_formatter(mpl.ticker.PercentFormatter(xmax=1))
+            plots[i] = ax.figure
+            plt.close()
+        return plots
+
+
+    def comp_factor_dist(self, index_column, for_each, data=None, plot=False, **kwargs):
+        """
+        Return:
+            distribution of offset column (exposure, tabular expected, etc)  across index column
+            values for each separate value of field "for_each"
         args:
-            doc=None: the mydoc document to which to write
-            show_analysis=False: whether to write the factor analysis exhibit to the doc
-        """
-        comp = self.compareFactorsAE()
+            data=None: default is model's data if none specified
+            of_column=None: column of which to take the distribution, offset column used if none specified
 
-        if not doc is None:
-            for c in comp:
-                # Save to doc
-                compPlot(c)
-                doc.add_fig('Model {}, Factors by {} vs Actual/VBT2015'.format(self.name, c.index.name))
-                if show_analysis:
-                    # Skip the caption argument.  The title above should suffice.
-                    doc.add_df(self.factorAnalysisExhibit(c.index.name).applymap('{:,.2f}'.format), size=6)
-        else:
-            for c in comp:
-                compPlot(c)
-        return comp
-
-
-    def showFactorsVsTableBetweenCatgories(self, *args, **kwargs):
-        """Plot ratios of combinations of factors, allowing visualization of differences where they're off between actual/table between categories and the factors for those categories.
-
-        kwargs:
-            plot=True: if should plot
-            doc: mydoc object if will plot and want to add a figure
-
-        returns:
-            dataframe with index showing pairs for further work
-
-        """
-
-        t = self
-
-        res = {( str(c.index.to_native_types()[a])
-                ,str(c.index.to_native_types()[b])):(c.iloc[a]/c.iloc[b])
-                 for c in t.compareFactorsAE()
-                 for a, b in itertools.combinations(range(len(c)),2)
-                } # all combinations between rows
-        res =  pd.DataFrame(res).T
-        res.index.names = ['numerator', 'deonominator']
-
-        plot = kwargs.get('plot', True)
-        if plot or kwargs.has_key('doc'):
-            # Plot the pairs
-            fig, ax = plt.subplots(1,1)
-            fig.set_size_inches(5,5)
-
-            mx = res.values.max()*1.1
-            res.plot.scatter(x=0,y=1, xlim=(0,mx), ylim=(0,mx), s=2, ax=ax, color='k', alpha=0.4)
-
-            plt.plot([0,mx], [0,mx], 'g') # line for equality
-            # Red zones: not even same directional relationship. Near red zones also not great.
-            ax.add_patch(mpl.patches.Rectangle((1, 0), mx, 1, angle=0.0, alpha=0.2, color='r'))
-            ax.add_patch(mpl.patches.Rectangle((0, 1), 1, mx, angle=0.0, alpha=0.2, color='r'))
-
-            ax.set_xlabel('Ratio of A/Table ratios between categories')
-            ax.set_ylabel('Ratio of model factors between categories')
-            ax.set_ylim(0,2)
-            ax.set_xlim(0,2)
-            
-            if not kwargs.has_key('doc'):
-                ax.set_title('Relationships between Categories\nOf Raw A/Table Ratios and Categorical Factors\nFrom model '+self.name)
-            else:
-                doc = kwargs['doc']
-                doc.add_fig('Model {} Relationships between Categories of Raw A/Table Ratios and Categorical Factors'.format(self.name))
-
-        return res
-    
-
-    def compFactorDist(self, indexColumn, forEach, plot=False, *args, **kwargs):
-        """Return: distribution of offset column (exposure, expected, etc)  across index column values for each separate value of field "forEach"
-        
-        kwargs:
-            data: default is GLM's data
-            ofColumn: column of which to take the distribution, default is the offset column
-        
         Example: where t is an instance:  plot ia_band1 factors on secondary y axis, 
-                    and distribution of each insurance_plan by ia_band1 
-            
-            t.compFactorDist('ia_band1', 'insurance_plan').plot(secondary_y='Factor')
-            
-        
+                    and distribution of each insurance_plan by ia_band1
+            t.comp_factor_dist('ia_band1', 'insurance_plan').plot(secondary_y='Factor')
         """
-        data = kwargs.pop('data', self.fit.model.data.frame)
-        ofColumn  = kwargs.pop('ofColumn', self.fit.offsetcol)
-        return compFactorDist(self, data, ofColumn, indexColumn, forEach, plot)
+        # comments from retired subsidiary function
+        """
+                Align factor with distribution between categories specified by indexColumn,
+                 for item in ofColumn (such as expected claims or exposure),
+                 splitting distribution in for_each, 
+                 really only works for log link.
 
-    def compFactorAvg(self, forEach, *args, **kwargs):
-        """Compare average factors weighted by the fit's offset column for different splits in forEach.
+                 Returns: dataframe, split by indexColumn down rows (dataframe index); 
+                     Columns: 'Factor' for factor of indexColumn, 
+                             then a column for each elelement of column forEach (such as for each insurance_plan)
+                 """
+
+        dist = get_dist(self.fit.model.data.frame, self.offset_column, index_column, for_each)
+
+        # Get the factor for indexColumn
+        fact = pd.DataFrame({'Factor': np.exp(self.pretty_params().loc[index_column])})
+
+        if plot:
+            fig, ax = plt.subplots(1)
+            dist.plot(kind='bar', ax=ax, rot=90, title='Distribution of {}'.format(ofColumn))
+            fact.plot(secondary_y='Factor', ax=ax, rot=90)
+            ax.legend(loc='upper left', bbox_to_anchor=(1.1, 1))
+        return pd.concat([fact, dist], axis=1).fillna(0)
+
+    def comp_factor_avg(self, for_each, data=None, of_column=None):
+        """Compare average factors weighted by the fit's offset column for different splits in for_each.
         arguments:
-        kwargs:
-            data, default is the GLM's data
-            ofColumn: column by which to weight the factors to get the average, such as exposure or expected claims; 
-                        default is model's offset column"""
-        data     = kwargs.pop('data', self.fit.model.data.frame)
-        ofColumn = kwargs.pop('ofColumn', self.fit.offsetcol)
+            for_each: category to be split into separate items
+            data=None: data to split, use model's dataset if none provided
+            of_column=None: column by which to weight the factors to get the average,
+                        such as exposure or expected claims;
+                        default is model's offset column if none is specified.
+            """
+        if data is None:
+            data =  self.fit.model.data.frame
+        if of_column is None:
+           of_column = self.offset_column
 
         # To avoid repeated calls
-        prepar = self.prettyParams()
-        
+        prepar = self.pretty_params()
+
         # List the levels in the model to compare. All of them but the intercept and the one for which we'll show
         # the factor, since for that one the average is just the factor.
         
-        lvls = list(set(prepar.index.levels[0]).difference(['Intercept', forEach]))
+        lvls = list(set(prepar.index.levels[0]).difference(['Intercept', for_each]))
         
         #function to get weighted average of factors.
-        # The dataframe passed hasthe factor as the 1st column, and is output of compFactorDist.
+        # The dataframe passed hasthe factor as the 1st column, and is output of comp_factor_dist.
         avgFactor = lambda df: df[[c for c in df.columns if c != 'Factor']].multiply(df['Factor'], axis=0).sum() 
-        res = pd.DataFrame({lvl:avgFactor(self.compFactorDist(lvl, forEach, plot=False, data=data, ofColumn=ofColumn)) 
+        res = pd.DataFrame({lvl:avgFactor(self.comp_factor_dist(lvl, for_each, plot=False,
+                                                                data=data, ofColumn=of_column))
                             for lvl in lvls})  # get the average factor for each lvl
         return pd.concat([ # Get the factors themselves
                           #self.fit.family.link.inverse(pd.DataFrame({forEach:prepar[forEach][list(set(data[forEach]))]}))
-                           self.fit.family.link.inverse(pd.DataFrame({forEach:prepar[forEach]}))
+                           np.exp(pd.DataFrame({for_each:prepar[for_each]}))
                             #add column for factors for thing we're splitting by
-                         , res], axis=1).T #append factors for thing we're splitting by and return.
-    
+                         , res],
+            axis=1).T #append factors for thing we're splitting by and return.
 
-    def factorAnalysisExhibit(self, forEach):
-        """Show across categories in forEach: 
+    def factor_analysis_exhibit(self, for_each):
+        """Show across categories in for_each:
         
         A/Table
         Factor
@@ -373,15 +309,16 @@ class GLMRun(object):
            forEach: should be a category in the model
            
        ... Compare factors for a split with the average factor in the applicable other categories and a/table"""
-        cf = {_df.index.names:_df for _df in self.compareFactorsAE()}[forEach].T
-        cfa = self.compFactorAvg(forEach) # the average factor: must exclude category forEach from this becasue is shown
-                 # as factor already
+        cf = self.compare_factors_with_a_to_t().loc[for_each].T
+
+        # the average factor: must exclude category forEach from this becasue is shown as factor already
+        cfa = self.comp_factor_avg(for_each)
         # Show intercept (overall factor) and take out the one that we're splitting by since we show it already
         cfa = pd.concat([
-            pd.DataFrame(self.fit.model.family.link.inverse(self.prettyParams()[('Intercept', 'Intercept')])
+            pd.DataFrame(np.exp(self.pretty_params()[('Intercept', 'Intercept')])
                              , index=['Overall']
                          , columns=cfa.columns)
-            , cfa.loc[cfa.index!= forEach]], axis=0            
+            , cfa.loc[cfa.index!= for_each]], axis=0
             )
         # datafame of a/t and the estimate
         atdf = pd.DataFrame({'Observed':cf.loc['A/Table']
@@ -389,149 +326,31 @@ class GLMRun(object):
                             ['Observed','Approximated'] # to reorder
                         ].T
         res = pd.concat([atdf # The A/T that we'd like to explain
-                         , pd.DataFrame({forEach:cf.loc['Factor']}).T # the factors themselves
+                         , pd.DataFrame({for_each:cf.loc['Factor']}).T # the factors themselves
                          , cfa
                          ]
                          , keys=['A/VBT15', 'Factor','Avg factors']) # The overall factor (intercept) will show as avg, is OK
         res.index.names = ['',''] # so don't show "None","None" when writing out
         return res
 
-                              
-def compFactorDist(aGLMRun, data, ofColumn, indexColumn, forEach, plot=True):
-    """Align factor with distribution between categories specified by indexColumn,
-    for item in ofColumn (such as expected claims or exposure),
-    splitting distribution in forEach, 
-    really only works for log link.
-    
-    Returns: dataframe, split by indexColumn down rows (dataframe index); 
-        Columns: 'Factor' for factor of indexColumn, 
-                then a column for each elelement of column forEach (such as for each insurance_plan)
-    """
-    dist = getDist(data, ofColumn, indexColumn, forEach)
-    # Get the factor for indexColumn
-    fact = pd.DataFrame({'Factor':aGLMRun.fit.family.link.inverse(aGLMRun.prettyParams().loc[indexColumn])})
-    if plot:
-        fig, ax = plt.subplots(1)
-        dist.plot(kind='bar', ax=ax, rot=90, title='Distribution of {}'.format(ofColumn))
-        fact.plot(secondary_y='Factor', ax=ax, rot=90)
-        ax.legend(loc='upper left', bbox_to_anchor=(1.1,1))
-    return pd.concat([fact, dist], axis=1).fillna(0)
+
+def get_exhibit_g(data, metric, basis='2015vbt'):
+    splits=  ['face_amount_band', 'dur_band1']
+    res = []
+    for s in splits:
+        pt = data.pivot_table(index=s,
+                                columns='insurance_plan',
+                                values=[f'{metric}_actual', f'{metric}_{basis}'],
+                                aggfunc=np.sum, margins=True)
+        res.append(pt[f'{metric}_actual'] / pt[f'{metric}_{basis}'])
+    return pd.concat(res, keys=splits).style.format('{:,.0%}')
 
 
-
-def getDist(data, ofColumn, indexColumn, forEach):
-    """Get distribution of value in ofColumn between categories of indexColumn, splitting by forEach (forEach is columns in result set)"""
-    tmp = data.pivot_table(index=indexColumn, columns=forEach, values=ofColumn, aggfunc=np.sum)
+def get_dist(data, of_column, index_column, for_each):
+    """Get distribution of value of_column
+     between categories of index_column, splitting by for_each.
+     Result has for_each across columns.
+     """
+    tmp = data.pivot_table(index=index_column, columns=for_each, values=of_column, aggfunc=np.sum)
     return tmp.div(tmp.sum(), axis=1)
-
-
-def compareAE(data, index, columns, *args, **kwargs):
-    """Show a to e by index and columns for quick inspection of results.
-    Shows: rows: top: count, bottom: amount
-        Columns: different bases: vbt15, g_count, g_amount, (then g_tree?)
-    """
-    bases   = ['qx2015vbt','g_count','g_amount']
-    metrics = ['policy', 'amount']
-    numerator = {'policy':'number_of_deaths', 'amount':'death_claim_amount'} # because source has nonstd names
-    pt = data.pivot_table(index=index, columns=columns
-                          , values=(numerator.values()  +
-                                    ['expected_death_{}_by_{}'.format(basis, metric)
-                                     for basis, metric
-                                     in itertools.product(bases, metrics)])
-                          , aggfunc=np.sum)
-    # For conctenating the dataframes:
-    res = {(metric,basis):(pt[numerator[metric]]/pt['expected_death_{}_by_{}'.format(basis, metric)])
-                    for metric, basis
-                    in itertools.product(metrics, bases)}
-    if kwargs.pop('plot',True):
-        fig, ax = plt.subplots(len(metrics), len(bases))
-        fig.set_size_inches(4*ax.shape[1], 3*ax.shape[0])
-        fig.tight_layout()
-        for _ax, _key in zip(ax.flatten(), itertools.product(metrics, bases)):
-            showLegend =  ( _key==(metrics[0], bases[-1]))
-            res[_key].plot(rot=90, ax=_ax, legend=showLegend # top right only
-                           , title='a/{} by {}'.format(_key[1], _key[0]), ylim=(0.5, 2)
-                           , style=[c+s for s, c in  itertools.product( ['-',':','--', '-.'], 'kbrg') ])
-            _ax.xaxis.set_ticks(np.arange(len(res[_key].index)))
-            _ax.xaxis.set_ticklabels(res[_key].index)
-            if showLegend:
-               _ax.legend(bbox_to_anchor=(1,1), loc='upper left')
-        plt.tight_layout() # need this too?
-    return res
-
-
-"""
-This file is to be run separately from glmtools.
-The models are saved as glmrun objects already, and these additional functions
-are added onto the glmrun class.
-
-"""
-
-import networkx as nx
-
-
-#################################################################################################################
-###  FROM HERE DOWN: The revised functions to plot correctly when have cross-combinations.
-###  Note: All factors that share variables must be combined into a tensor of factors for comparison to A/E.
-###  That means that all variables that are connected must be grouped together - and the degree must be <= 2 for it
-###  to be shown here.
-#################################################################################################################
-
-
-
-def getSubgraphs(coefs):
-    """Retrun groups of the variable sets of factors which share no indices between groups.  Pass output of getCoef."""
-    g = nx.Graph()
-    for c0, c1 in itertools.product(coefs, coefs):
-        # Add the edge if they intersect, including edges to themselves so they'll show up as neighbors.
-        if len(set(c0.index.names).intersection(set(c1.index.names))):
-            g.add_edge(tuple(c0.index.names), tuple(c1.index.names))  # each will be added twice, so what
-    sgs = []  # the subgraphs
-    ns_left = set(g.nodes())
-    while len(ns_left):  # while some nodes are unassigned to a graph:
-        # Assign the first one to a new subgraph.
-        sgs.append(list(g.neighbors(ns_left.pop())))
-        ns_left = ns_left.difference(sgs[-1])  # Take that subgraph's nodes out from the remaining nodes.
-    return sgs
-
-
-def addCoefs(coefs):
-    """Add the two sets of coeffs. Their like-named multiindex columns will be matched.
-    They are not exponentiated here.
-    I need to start with a series with all the possibilities.
-    NOTE: will miss adding default categories in some cases, always send 1st element in list with
-    series of zeros with full index to be populated.
-    This full index could be obtained by using the field names from a pivot tabel of the source data."""
-    res = coefs[0];
-    for _c in coefs[1:]:
-        res = res.add(_c, fill_value=0)
-    return res
-
-
-def compPlot(c):
-    """Plot a dataframe of Factor and A/Table. If factors are univariate then is simple; if bivarate
-    then plot 4 graphs.
-
-    Utility function, which can be used alone.
-    """
-    deg = len(c.index.names)  # degree of the plots
-
-    plotoptions = dict(rot=45, ylim=(0.5, 2))
-    if 1 == deg:
-        c.plot(style=['k.-', 'b.-'], **plotoptions)
-    elif 2 == deg:
-        # Plot 4: factor, beside a/e, with one x, then the other.
-        tmp = c.reset_index().pivot_table(index=c.index.names[0], columns=c.index.names[1], values=c.columns)
-        # ... aggfunc irrelevant, is exactly one value, so mean, min, sum, max, ... all same
-        fig, ax = plt.subplots(2, 2)
-        fig.set_size_inches(8, 6)
-        fig.tight_layout()
-        for _ax, _y, _leg in zip(ax[0], c.columns, [False, True]):  # Factor or A/E
-            tmp[_y].plot(title=_y, ax=_ax, legend=_leg, **plotoptions)
-        for _ax, _y, _leg in zip(ax[1], c.columns,
-                                 [False, True]):  # Factor or A/E # Transposed other way
-            tmp[_y].T.plot(title=_y, ax=_ax, legend=_leg, **plotoptions)
-        ax[0, 1].legend(loc='upper left', bbox_to_anchor=(1, 1))
-        ax[1, 1].legend(loc='upper left', bbox_to_anchor=(1, 1))
-        plt.tight_layout()
 
