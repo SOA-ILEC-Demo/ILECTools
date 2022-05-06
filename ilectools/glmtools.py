@@ -250,8 +250,10 @@ class PoissonWrapper(object):
                              then a column for each elelement of column forEach (such as for each insurance_plan)
                  """
 
-        dist = get_dist(self.fit.model.data.frame, self.offset_column, index_column, for_each)
-
+        # distribution: columns add to 100%
+        dist = self.fit.model.data.frame.pivot_table(index=index_column, columns=for_each,
+                                                     values=self.offset_column,
+                                                     aggfunc=np.sum).apply(lambda s: s/s.sum())
         # Get the factor for indexColumn
         fact = pd.DataFrame({'Factor': np.exp(self.pretty_params().loc[index_column])})
 
@@ -344,13 +346,3 @@ def get_exhibit_g(data, metric, basis='2015vbt'):
                                 aggfunc=np.sum, margins=True)
         res.append(pt[f'{metric}_actual'] / pt[f'{metric}_{basis}'])
     return pd.concat(res, keys=splits).style.format('{:,.0%}')
-
-
-def get_dist(data, of_column, index_column, for_each):
-    """Get distribution of value of_column
-     between categories of index_column, splitting by for_each.
-     Result has for_each across columns.
-     """
-    tmp = data.pivot_table(index=index_column, columns=for_each, values=of_column, aggfunc=np.sum)
-    return tmp.div(tmp.sum(), axis=1)
-
