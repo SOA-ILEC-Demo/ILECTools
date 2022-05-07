@@ -11,7 +11,7 @@ import networkx as nx
 from functools import reduce
 
 
-def add_cols(df):
+def append_columns_for_model(df):
     '''Add certain columns to the dataframe for modeling and return it.
     These additional columns are categorical groupings of fields:
     ltp: level term period grouping 20 year and not term, to 20 year will be a baseline term rate
@@ -153,7 +153,7 @@ class PoissonWrapper(object):
         self.fit = smf.poisson(data=data,
                       formula=formula,
                       offset=np.log(data[offset_column]),
-                      #family=sm.families.Poisson(link=sm.families.links.log())
+                      #family=sm.families.Poisson(link=sm.families.links.log()) # needed if using smf.glm
                       ).fit()
 
         self.offset_column = offset_column  # to keep the name
@@ -307,8 +307,8 @@ class PoissonWrapper(object):
         Average of all other factors
         Approximate A/Table (product of all factors or average thereof) 
        
-       arguments:
-           forEach: should be a category in the model
+        arguments:
+           for_each: should be a category in the model
            
        ... Compare factors for a split with the average factor in the applicable other categories and a/table"""
         cf = self.compare_factors_with_a_to_t().loc[for_each].T
@@ -336,7 +336,7 @@ class PoissonWrapper(object):
         return res
 
 
-def get_exhibit_g(data, metric, basis='2015vbt'):
+def get_exhibit_g(data, metric, basis='2015vbt', caption=None):
     splits=  ['face_amount_band', 'dur_band1']
     res = []
     for s in splits:
@@ -345,4 +345,15 @@ def get_exhibit_g(data, metric, basis='2015vbt'):
                                 values=[f'{metric}_actual', f'{metric}_{basis}'],
                                 aggfunc=np.sum, margins=True)
         res.append(pt[f'{metric}_actual'] / pt[f'{metric}_{basis}'])
-    return pd.concat(res, keys=splits).style.format('{:,.0%}')
+    res = (pd.concat(res, keys=splits).style.format('{:,.0%}')
+            .set_table_styles(
+            [{'selector': 'th', 'props': [('border-style', 'solid'),
+                                          ('border-width', '1px')]},
+             {'selector': 'td', 'props': [('border-style', 'dashed'),
+                                          ('border-width', '1px')]},
+             ]).apply(lambda s: ['font-weight:bold;' if s.name[1] == 'All' else ''] * len(s), axis=1) \
+            .apply(lambda s: ['font-weight:bold;' if s.name == 'All' else ''] * len(s), axis=0)
+           )
+    if not (caption is None):
+        res = res.set_caption(caption)
+    return res
