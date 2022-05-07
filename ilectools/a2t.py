@@ -160,7 +160,7 @@ class PoissonWrapper(object):
 
 
     def pretty_params(self):
-        """Prettify the parameters: also add 1 where don't have one."""
+        """Prettify the parameters: also add 0 parameter where don't have one for the default category"""
         vals = {getKV(_k):_v
                 for _k,_v
                 in self.fit.params.to_dict().items()
@@ -208,14 +208,15 @@ class PoissonWrapper(object):
 
         return pd.DataFrame({'Factor':coef, 'A/Table':a_t}).sort_index()
 
-    def plot_comparision(self):
+
+    def plot_comparison(self):
         '''Return dictionary of plots of a/table and factor'''
 
-        plots = {}
         plotoptions = dict(rot=45, ylim=(0.5, 2), grid=True)
         a_t = self.compare_factors_with_a_to_t()
         vars = list(set(a_t.index.to_frame()[0])) # get variables to show
 
+        plots = {}
         for i in vars:
             ax = a_t.loc[i].plot(style=['r.-', 'b.-'], **plotoptions)
             plt.axhline(1, color='k')
@@ -333,7 +334,16 @@ class PoissonWrapper(object):
                          ]
                          , keys=['A/VBT15', 'Factor','Avg factors']) # The overall factor (intercept) will show as avg, is OK
         res.index.names = ['',''] # so don't show "None","None" when writing out
-        return res
+        return (res.rename_axis(columns=for_each)
+            .style.format('{:,.2f}')
+            .set_table_styles(
+                    [{'selector': tag, 'props': [('border-style', bs),
+                                         ('border-width', '1px'),
+                                         ('padding-top', '2px'),
+                                         ('padding-bottom', '2px')]}
+                     for tag, bs in [('th', 'solid'), ('td', 'dashed')]])
+            )
+
 
 
 def get_exhibit_g(data, metric, basis='2015vbt', caption=None):
@@ -346,11 +356,17 @@ def get_exhibit_g(data, metric, basis='2015vbt', caption=None):
                                 aggfunc=np.sum, margins=True)
         res.append(pt[f'{metric}_actual'] / pt[f'{metric}_{basis}'])
     res = (pd.concat(res, keys=splits).style.format('{:,.0%}')
-            .set_table_styles(
-            [{'selector': 'th', 'props': [('border-style', 'solid'),
-                                          ('border-width', '1px')]},
-             {'selector': 'td', 'props': [('border-style', 'dashed'),
-                                          ('border-width', '1px')]},
+           .set_table_styles([
+        {'selector':'caption', 'props':[('font-size', 'large'), ('font-face', 'bold'),
+                                        ('text-align', 'left')]},
+        {'selector': 'th', 'props': [('border-style', 'solid'),
+                                      ('border-width', '1px'),
+                                      ('padding-top', '2px'),
+                                      ('padding-bottom', '2px')],},
+        {'selector': 'td', 'props': [('border-style', 'dashed'),
+                                      ('border-width', '1px'),
+                                      ('padding-top', '2px'),
+                                      ('padding-bottom', '2px')]},
              ]).apply(lambda s: ['font-weight:bold;' if s.name[1] == 'All' else ''] * len(s), axis=1) \
             .apply(lambda s: ['font-weight:bold;' if s.name == 'All' else ''] * len(s), axis=0)
            )
