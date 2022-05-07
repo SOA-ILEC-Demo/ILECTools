@@ -32,3 +32,26 @@ import ilectools
 # now you're good to go
 ```
 
+## Environment management
+
+An "environment" is a set of various packages, all of which have their own versions.  Not all 
+package versions are compatible with each other so it is important to keep track of what 
+you are doing.   The notebooks have been tested in an environment which conda-users 
+should be able to duplicate  with the included environment specification files in the
+```env``` subdirectory.  I intend for  you to be able to create the ```ilec0``` environment 
+on your machine with this command:
+
+```commandline
+conda env create -f environment.yml # of course include any path you need to the yml file
+```
+
+These sample notebooks were run on machines with 32gb RAM, Ubuntu 20.04, with a 32gb 
+swapfile.  Your mileage may vary!  You can see in the environment specs that Python 3.10.4 
+was used.  Miniforge was used for environment management, as opposed to miniconda or the
+Anaconda python distribution.  Pay attention to your licenses always.
+
+For more on environment management with ```conda```:
+* https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html
+* https://shandou.medium.com/export-and-create-conda-environment-with-yml-5de619fe5a2
+
+
