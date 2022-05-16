@@ -7,7 +7,7 @@ setup(name='ilectools',
       url='https://github.com/brianholland/ILECTools.git',
       author='Brian Holland',
       author_email='brian.d.holland@gmail.com',
-      license='MIT',
+      license='BSD-3-Clause',
       packages=['ilectools'],
       install_requires=['pandas','numpy','matplotlib'  'pandas-datareader'
                 ],
